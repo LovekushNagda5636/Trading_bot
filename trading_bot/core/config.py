@@ -11,16 +11,31 @@ from typing import Dict, List, Optional, Any
 import json
 import logging
 try:
-    from pydantic_settings import BaseSettings
+    from pydantic_settings import BaseSettings, SettingsConfigDict
 except ImportError:
+    # Fallback for Pydantic V1 if absolutely necessary, 
+    # but the user has V2 installed.
     from pydantic import BaseSettings
-from pydantic import field_validator
+    SettingsConfigDict = None
 
 logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
+    
+    if SettingsConfigDict:
+        model_config = SettingsConfigDict(
+            env_file=".env",
+            env_prefix="TRADING_BOT_",
+            extra="ignore",
+            case_sensitive=False
+        )
+    else:
+        class Config:
+            env_file = ".env"
+            env_prefix = "TRADING_BOT_"
+            extra = "ignore"
     
     # Environment
     environment: str = "development"
@@ -54,9 +69,6 @@ class Settings(BaseSettings):
     alert_email: Optional[str] = None
     alert_sms: Optional[str] = None
     
-    class Config:
-        env_file = ".env"
-        env_prefix = "TRADING_BOT_"
 
 
 @dataclass

@@ -1,0 +1,6 @@
+{
+  "trading_enabled": false,
+  "paper_trading": true,
+  "max_positions": 10,
+  "risk_limits": {}
+}
