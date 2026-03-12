@@ -1,0 +1,31 @@
+[Unit]
+Description=Angel One Self-Learning Trading Bot
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/trading-bot
+EnvironmentFile=/home/ubuntu/trading-bot/.env
+ExecStart=/home/ubuntu/trading-bot/venv/bin/python continuous_trading_bot.py
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/ubuntu/trading-bot/logs/stdout.log
+StandardError=append:/home/ubuntu/trading-bot/logs/stderr.log
+
+# Resource limits
+MemoryMax=1G
+CPUQuota=50%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/trading-bot
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+# ═══════════════════════════════════════════════════════════
+# SECURITY: Never commit secrets, credentials, or log files
+# ═══════════════════════════════════════════════════════════
+
+# Environment & Secrets (CRITICAL — contains API keys, passwords)
+.env
+.env.*
+!.env.example
+config/angel_one_config.json
+
+# Logs (may contain credentials leaked by libraries)
+logs/
+*.log
+
+# Data (trading data, models, journals)
+data/
+trades.json
+scan_result_today.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+venv/
+.venv/
+
+# IDE & Editor specs
+.vscode/
+.idea/
+.kiro/
+*.swp
+*.swo
+
+# Temporary files
+temp_*.txt
+actual_json.txt
+test_output.txt
+test_result.log
+bot_error.log

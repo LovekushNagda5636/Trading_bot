@@ -1,0 +1,22 @@
+[Unit]
+Description=Trading Bot Dashboard
+After=trading-bot.service
+Wants=trading-bot.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/trading-bot
+EnvironmentFile=/home/ubuntu/trading-bot/.env
+ExecStart=/home/ubuntu/trading-bot/venv/bin/python dashboard.py --port 8888
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/trading-bot/logs/dashboard_stdout.log
+StandardError=append:/home/ubuntu/trading-bot/logs/dashboard_stderr.log
+
+# Resource limits
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

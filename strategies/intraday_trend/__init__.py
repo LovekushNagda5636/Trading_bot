@@ -1,0 +1,1 @@
+"""Intraday Trend Following Strategies"""
