@@ -11,6 +11,8 @@ import numpy as np
 
 from ..core.models import Position, Trade, Signal
 from ..execution.broker_interface import BrokerOrder
+from .enhanced_position_sizer import EnhancedPositionSizer, PositionSizeResult
+from .adaptive_stop_manager import AdaptiveStopManager, StopLossLevel, StopLossUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,10 @@ class RiskManager:
         self.risk_limits = RiskLimits(**config.get('risk_limits', {}))
         self.current_metrics = RiskMetrics()
         
+        # Initialize enhanced components
+        self.position_sizer = EnhancedPositionSizer(config.get('position_sizing', {}))
+        self.stop_manager = AdaptiveStopManager(config.get('stop_loss', {}))
+        
         # Risk tracking
         self.daily_trades = []
         self.position_history = []
@@ -58,7 +64,13 @@ class RiskManager:
         # Emergency stop flag
         self.emergency_stop = False
         
-        logger.info("Risk Manager initialized")
+        # Track win/loss statistics for Kelly Criterion
+        self.win_count = 0
+        self.loss_count = 0
+        self.total_wins = 0.0
+        self.total_losses = 0.0
+        
+        logger.info("Risk Manager initialized with Enhanced Position Sizer and Adaptive Stop Manager")
     
     def can_place_order(self, signal: Signal, account_balance: float, 
                        current_positions: List[Position]) -> Tuple[bool, str, int]:
@@ -114,49 +126,82 @@ class RiskManager:
         return True, "Risk checks passed", position_size
     
     def calculate_position_size(self, signal: Signal, account_balance: float, 
-                              current_positions: List[Position]) -> int:
+                              current_positions: List[Position],
+                              regime: str = 'sideways',
+                              confidence: float = 0.7,
+                              atr: Optional[float] = None) -> int:
         """
-        Calculate optimal position size based on risk parameters.
+        Calculate optimal position size using Enhanced Kelly Criterion.
         
         Args:
             signal: Trading signal
             account_balance: Current account balance
             current_positions: List of current positions
+            regime: Current market regime
+            confidence: Model confidence (0-1)
+            atr: Average True Range
             
         Returns:
             Position size in shares
         """
-        # Risk per trade (1% of account)
+        try:
+            # Calculate win probability and win/loss ratio from historical data
+            win_probability = self._calculate_win_probability()
+            avg_win_loss_ratio = self._calculate_win_loss_ratio()
+            
+            # Use enhanced position sizer
+            result = self.position_sizer.calculate_position_size(
+                capital=account_balance,
+                entry_price=signal.price,
+                stop_loss=signal.stop_loss if signal.stop_loss else signal.price * 0.99,
+                win_probability=win_probability,
+                avg_win_loss_ratio=avg_win_loss_ratio,
+                confidence=confidence,
+                regime=regime,
+                max_positions=self.risk_limits.max_positions
+            )
+            
+            logger.info(f"Position size calculated: {result.quantity} shares | {result.reasoning}")
+            
+            return result.quantity
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced position sizing: {e}")
+            # Fallback to simple calculation
+            return self._simple_position_size(signal, account_balance)
+    
+    def _simple_position_size(self, signal: Signal, account_balance: float) -> int:
+        """Fallback simple position sizing."""
         risk_amount = account_balance * self.risk_limits.max_position_risk
         
-        # Calculate stop loss distance
         if signal.stop_loss and signal.price:
             stop_distance = abs(signal.price - signal.stop_loss)
-            stop_distance_pct = stop_distance / signal.price
-        else:
-            # Default 2% stop loss if not provided
-            stop_distance_pct = 0.02
-            stop_distance = signal.price * stop_distance_pct
+            if stop_distance > 0:
+                return int(risk_amount / stop_distance)
         
-        # Position size based on risk amount and stop distance
-        if stop_distance > 0:
-            position_size = int(risk_amount / stop_distance)
-        else:
-            position_size = 0
+        # Default: 2% of account
+        return int((account_balance * 0.02) / signal.price)
+    
+    def _calculate_win_probability(self) -> float:
+        """Calculate win probability from historical trades."""
+        total_trades = self.win_count + self.loss_count
+        if total_trades == 0:
+            return 0.55  # Default 55% win rate
         
-        # Apply additional constraints
-        max_position_value = account_balance * 0.2  # Max 20% of account per position
-        max_shares_by_value = int(max_position_value / signal.price)
+        return self.win_count / total_trades
+    
+    def _calculate_win_loss_ratio(self) -> float:
+        """Calculate average win/loss ratio."""
+        if self.loss_count == 0 or self.total_losses == 0:
+            return 1.5  # Default 1.5:1 ratio
         
-        position_size = min(position_size, max_shares_by_value)
+        avg_win = self.total_wins / self.win_count if self.win_count > 0 else 0
+        avg_loss = abs(self.total_losses / self.loss_count)
         
-        # Ensure minimum viable position
-        min_position_size = max(1, int(1000 / signal.price))  # Minimum ₹1000 position
+        if avg_loss == 0:
+            return 1.5
         
-        if position_size < min_position_size:
-            position_size = 0  # Too small to be viable
-        
-        return position_size
+        return avg_win / avg_loss
     
     def calculate_position_risk(self, signal: Signal, quantity: int, 
                               account_balance: float) -> float:
@@ -337,7 +382,7 @@ class RiskManager:
     
     def add_trade(self, trade: Trade) -> None:
         """
-        Add completed trade to tracking.
+        Add completed trade to tracking and update statistics.
         
         Args:
             trade: Completed trade
@@ -347,7 +392,92 @@ class RiskManager:
         # Update daily P&L
         self.current_metrics.daily_pnl += trade.pnl
         
-        logger.info(f"Trade added: {trade.symbol} P&L: {trade.pnl}")
+        # Update win/loss statistics for Kelly Criterion
+        if trade.pnl > 0:
+            self.win_count += 1
+            self.total_wins += trade.pnl
+        else:
+            self.loss_count += 1
+            self.total_losses += trade.pnl
+        
+        logger.info(f"Trade added: {trade.symbol} P&L: {trade.pnl} | Win rate: {self._calculate_win_probability():.1%}")
+    
+    def calculate_initial_stop_loss(
+        self,
+        entry_price: float,
+        direction: str,
+        atr: float,
+        support_resistance: Optional[float] = None,
+        volatility: float = 0.15
+    ) -> StopLossLevel:
+        """
+        Calculate initial stop-loss using adaptive stop manager.
+        
+        Args:
+            entry_price: Entry price
+            direction: 'long' or 'short'
+            atr: Average True Range
+            support_resistance: Key S/R level
+            volatility: Current volatility
+            
+        Returns:
+            StopLossLevel with optimal stop
+        """
+        return self.stop_manager.calculate_initial_stop(
+            entry_price=entry_price,
+            direction=direction,
+            atr=atr,
+            support_resistance=support_resistance,
+            current_volatility=volatility
+        )
+    
+    def update_stop_loss(
+        self,
+        position: Position,
+        current_price: float,
+        atr: float,
+        volatility: float
+    ) -> Optional[StopLossUpdate]:
+        """
+        Update stop-loss for an existing position.
+        
+        Args:
+            position: Current position
+            current_price: Current market price
+            atr: Current ATR
+            volatility: Current volatility
+            
+        Returns:
+            StopLossUpdate if stop should be updated
+        """
+        try:
+            # Determine direction
+            direction = 'long' if position.quantity > 0 else 'short'
+            
+            # Calculate initial risk
+            initial_risk = abs(position.average_price - position.stop_loss) if hasattr(position, 'stop_loss') else position.average_price * 0.01
+            
+            # Get comprehensive stop update
+            update = self.stop_manager.get_comprehensive_stop_update(
+                entry_price=position.average_price,
+                entry_time=position.entry_time if hasattr(position, 'entry_time') else datetime.now(),
+                current_price=current_price,
+                current_stop=position.stop_loss if hasattr(position, 'stop_loss') else position.average_price * 0.99,
+                direction=direction,
+                initial_risk=initial_risk,
+                atr=atr,
+                current_volatility=volatility
+            )
+            
+            if update.should_update:
+                logger.info(f"Stop-loss update for {position.symbol}: {update.reasoning}")
+                return update
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error updating stop-loss: {e}")
+            return None
     
     def get_position_limits(self, symbol: str) -> Dict[str, int]:
         """

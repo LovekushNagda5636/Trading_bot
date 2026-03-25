@@ -1,0 +1,177 @@
+Trading bot/
+├── .kiro
+│   └── specs
+│       └── remove-yahoo-finance-dependencies
+│           └── requirements.md
+├── config
+│   ├── angel_one_config.json
+│   └── trading_development.json
+├── data
+│   ├── journal
+│   │   ├── daily_stats.json
+│   │   ├── daily_summary_2026-03-12.json
+│   │   ├── daily_summary_2026-03-16.json
+│   │   ├── learned_rules.json
+│   │   ├── learning_report_20260223.json
+│   │   ├── learning_report_20260224.json
+│   │   ├── learning_report_20260312.json
+│   │   ├── learning_report_20260316.json
+│   │   ├── strategy_stats.json
+│   │   └── trades_journal.json
+│   ├── models
+│   │   ├── adaptive_params.json
+│   │   ├── ai_population.json
+│   │   └── composite_strategies.json
+│   └── bot_state.json
+├── deploy
+│   ├── setup.sh
+│   ├── trading-bot.service
+│   └── trading-dashboard.service
+├── examples
+│   └── test_risk_management.py
+├── strategies
+│   ├── fno
+│   │   ├── __init__.py
+│   │   ├── banknifty_options_straddle.py
+│   │   ├── nifty_futures_breakout.py
+│   │   └── stock_futures_momentum.py
+│   ├── intraday_breakout
+│   │   ├── __init__.py
+│   │   ├── atr_breakout.py
+│   │   ├── bb_breakout.py
+│   │   ├── keltner_breakout.py
+│   │   ├── orb.py
+│   │   ├── pdh_pdl_break.py
+│   │   ├── pivot_breakout.py
+│   │   ├── range_breakout.py
+│   │   ├── squeeze_breakout.py
+│   │   ├── volatility_expansion.py
+│   │   ├── volume_breakout.py
+│   │   ├── vwap_breakout.py
+│   │   └── vwap_reclaim.py
+│   ├── intraday_reversion
+│   │   ├── __init__.py
+│   │   ├── bb_mean_reversion.py
+│   │   ├── keltner_reversion.py
+│   │   ├── pivot_reversal.py
+│   │   ├── rsi_reversion.py
+│   │   ├── sr_bounce.py
+│   │   ├── stochastic_reversion.py
+│   │   ├── vwap_reversion.py
+│   │   └── zscore_reversion.py
+│   ├── intraday_trend
+│   │   ├── __init__.py
+│   │   ├── adx_trend_filter.py
+│   │   ├── dmi.py
+│   │   ├── donchian_breakout.py
+│   │   ├── ema_crossover.py
+│   │   ├── ema_pullback.py
+│   │   ├── heikin_ashi.py
+│   │   ├── ichimoku.py
+│   │   ├── ma_ribbon.py
+│   │   ├── macd.py
+│   │   ├── parabolic_sar.py
+│   │   ├── sma_crossover.py
+│   │   └── supertrend.py
+│   ├── price_action
+│   │   ├── __init__.py
+│   │   ├── break_retest.py
+│   │   ├── channel_trading.py
+│   │   ├── doji.py
+│   │   ├── engulfing.py
+│   │   ├── hammer.py
+│   │   ├── inside_bar.py
+│   │   ├── pin_bar.py
+│   │   ├── shooting_star.py
+│   │   └── trendline_break.py
+│   ├── volume
+│   │   ├── __init__.py
+│   │   ├── accumulation_distribution.py
+│   │   ├── obv_strategy.py
+│   │   └── volume_price_analysis.py
+│   ├── __init__.py
+│   ├── base.py
+│   └── registry.py
+├── trading_bot
+│   ├── analysis
+│   │   ├── __init__.py
+│   │   ├── indicators.py
+│   │   ├── multi_timeframe.py
+│   │   └── technical_analyzer.py
+│   ├── backtesting
+│   │   ├── __init__.py
+│   │   └── backtest_engine.py
+│   ├── core
+│   │   ├── __init__.py
+│   │   ├── config.py
+│   │   ├── events.py
+│   │   ├── logging.py
+│   │   └── models.py
+│   ├── data
+│   │   ├── __init__.py
+│   │   ├── angel_one_data_feed.py
+│   │   ├── candle_manager.py
+│   │   ├── database.py
+│   │   ├── live_data_feed.py
+│   │   └── market_feed.py
+│   ├── engine
+│   │   ├── __init__.py
+│   │   └── trading_engine.py
+│   ├── execution
+│   │   ├── __init__.py
+│   │   ├── angel_one_broker.py
+│   │   ├── broker_interface.py
+│   │   ├── new.py
+│   │   ├── order_manager.py
+│   │   ├── position_manager.py
+│   │   └── zerodha_broker.py
+│   ├── ml
+│   │   ├── __init__.py
+│   │   ├── adaptive_strategy_engine.py
+│   │   ├── ensemble_scorer.py
+│   │   ├── feature_engineering.py
+│   │   ├── fno_scanner.py
+│   │   ├── market_intelligence.py
+│   │   ├── micro_learner.py
+│   │   ├── model_trainer.py
+│   │   ├── regime_detector.py
+│   │   ├── reinforcement_learning.py
+│   │   ├── strategy_generator.py
+│   │   └── trade_journal.py
+│   ├── monitoring
+│   │   └── __init__.py
+│   ├── risk
+│   │   ├── __init__.py
+│   │   ├── adaptive_stop_manager.py
+│   │   ├── correlation_manager.py
+│   │   ├── enhanced_position_sizer.py
+│   │   ├── portfolio_manager.py
+│   │   ├── position_sizer.py
+│   │   ├── risk_manager.py
+│   │   └── transaction_costs.py
+│   ├── strategy
+│   │   ├── __init__.py
+│   │   ├── ai_strategy.py
+│   │   ├── base.py
+│   │   ├── mean_reversion.py
+│   │   ├── momentum.py
+│   │   └── strategy_engine.py
+│   └── __init__.py
+├── .env
+├── .env.example
+├── .gitignore
+├── COMMODITY_FNO_FIX.md
+├── INTEGRATION_GUIDE.md
+├── PHASE1_IMPLEMENTATION_SUMMARY.md
+├── PROGRESS_TRACKER.md
+├── README.md
+├── SYSTEM_IMPROVEMENT_PLAN.md
+├── angel_one_auth_service.py
+├── continuous_trading_bot.py
+├── dashboard.html
+├── dashboard.py
+├── generate_tree.py
+├── get_mcx_tokens.py
+├── requirements.txt
+├── run.py
+└── test_enhanced_risk_management.py

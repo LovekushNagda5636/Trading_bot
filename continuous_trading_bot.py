@@ -62,6 +62,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress noisy third-party logs (SmartAPI AB1019, urllib3 retries, etc.)
+# SmartAPI uses logzero internally — silence it at the root level.
+logging.getLogger("smartConnect").setLevel(logging.CRITICAL)
+logging.getLogger("SmartApi").setLevel(logging.CRITICAL)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
+try:
+    import logzero
+    logzero.logger.setLevel(logging.CRITICAL)
+except Exception:
+    pass
+
 
 def load_config() -> Dict:
     try:
@@ -90,6 +103,15 @@ from trading_bot.ml.trade_journal import TradeJournal, TradeRecord
 from trading_bot.ml.adaptive_strategy_engine import AdaptiveStrategyEngine
 from trading_bot.ml.regime_detector import MarketRegimeDetector
 from trading_bot.ml.fno_scanner import FnOScanner
+
+# ── v3.0 Enhanced Modules ────────────────────────────────────────────────────
+from trading_bot.data.candle_manager import CandleManager
+from trading_bot.ml.ensemble_scorer import EnsembleScorer
+from trading_bot.ml.micro_learner import MicroLearner
+from trading_bot.risk.transaction_costs import TransactionCostModel
+from trading_bot.risk.correlation_manager import CorrelationRiskManager
+from trading_bot.analysis.multi_timeframe import MultiTimeframeAnalyzer
+from trading_bot.ml.model_trainer import ModelTrainer
 
 # ── Angel One Market Data Fetcher ─────────────────────────────────────────────
 
@@ -177,6 +199,48 @@ INDEX_TOKENS = {
     "FINNIFTY": "99926037",
     "MIDCPNIFTY": "99926074",
 }
+
+# ── MCX Commodity Tokens ──────────────────────────────────────────────────────
+# These are exchange-level symbol tokens for MCX commodity futures.
+# Angel One uses "MCX" as the exchange key for commodity data.
+# Token IDs correspond to near-month (active) futures contracts.
+# NOTE: These token IDs may change on contract expiry — update monthly.
+MCX_COMMODITY_TOKENS = {
+    # Energy
+    "NATURALGAS": "504265",
+    "CRUDEOIL":   "499095",
+    # Precious Metals
+    "GOLD":       "454818",
+    "GOLDM":      "477904",       # Gold Mini
+    "GOLDGUINEA": "488785",       # Gold Guinea
+    "SILVER":     "464150",
+    "SILVERM":    "457533",       # Silver Mini
+    # Base Metals
+    "COPPER":     "510480",
+    "ZINC":       "510478",
+    "LEAD":       "510476",
+    "NICKEL":     "488796",
+    "ALUMINIUM":  "510472",
+    # Agri
+    "COTTON":     "510483",
+    "MENTHAOIL":  "488802",
+}
+
+# Commodity sector classification for dashboard display
+COMMODITY_SECTORS = {
+    "Energy":          ["NATURALGAS", "CRUDEOIL"],
+    "Precious Metals": ["GOLD", "GOLDM", "GOLDGUINEA", "SILVER", "SILVERM"],
+    "Base Metals":     ["COPPER", "ZINC", "LEAD", "NICKEL", "ALUMINIUM"],
+    "Agriculture":     ["COTTON", "MENTHAOIL"],
+}
+
+def is_commodity_market_hours():
+    """MCX commodity market hours: Mon-Fri 9:00-23:30 (normal) / 23:55 (agri)."""
+    now = datetime.now()
+    if now.weekday() >= 5:       # Sat-Sun closed
+        return False
+    t = now.strftime("%H:%M")
+    return "09:00" <= t <= "23:30"
 
 
 class AngelOneDataFetcher:
@@ -315,6 +379,230 @@ class AngelOneDataFetcher:
 
         logger.info(f"Fetched {len(all_data)} stocks via Angel One API")
         return all_data
+
+    def fetch_commodities(self) -> Dict[str, Dict]:
+        """Fetch MCX commodity futures data using Angel One API."""
+        api = self._get_api()
+        if not api:
+            return {}
+
+        commodity_data = {}
+        token_list = list(MCX_COMMODITY_TOKENS.items())
+
+        try:
+            tokens = [tok for _, tok in token_list]
+            data = api.getMarketData("FULL", {"MCX": tokens})
+
+            if data and data.get("status"):
+                for item in data.get("data", {}).get("fetched", []):
+                    token = str(item.get("symbolToken", ""))
+                    sym = None
+                    for s, t in token_list:
+                        if t == token:
+                            sym = s
+                            break
+                    if not sym:
+                        continue
+
+                    ltp = float(item.get("ltp", 0))
+                    if ltp <= 0:
+                        continue
+
+                    open_p = float(item.get("open", ltp))
+                    high = float(item.get("high", ltp))
+                    low = float(item.get("low", ltp))
+                    close = float(item.get("close", ltp))
+                    volume = int(item.get("tradeVolume", 0))
+                    prev_close = close
+
+                    chg_pct = ((ltp - open_p) / open_p * 100) if open_p > 0 else 0
+
+                    # Determine commodity sector
+                    sector = "Other"
+                    for sec_name, sec_syms in COMMODITY_SECTORS.items():
+                        if sym in sec_syms:
+                            sector = sec_name
+                            break
+
+                    commodity_data[sym] = {
+                        "symbol": sym,
+                        "ltp": ltp,
+                        "open": open_p,
+                        "high": high,
+                        "low": low,
+                        "prev_close": prev_close,
+                        "change_pct": round(chg_pct, 2),
+                        "volume": volume,
+                        "instrument_type": "COMMODITY",
+                        "commodity_sector": sector,
+                        "source": "AngelOne_MCX",
+                        "ts": datetime.now().isoformat(),
+                    }
+            else:
+                msg = data.get("message", "Unknown") if data else "No response"
+                logger.warning(f"MCX fetch failed: {msg}")
+        except Exception as e:
+            logger.warning(f"Commodity fetch error: {e}")
+
+        if commodity_data:
+            logger.info(f"📦 Fetched {len(commodity_data)} MCX commodities")
+        return commodity_data
+
+
+# ── Commodity Analyzer ────────────────────────────────────────────────────────
+
+class CommodityAnalyzer:
+    """
+    Analyzes MCX commodity data and generates trading signals.
+    Uses momentum, RSI estimation, volatility, and trend detection.
+    """
+
+    def __init__(self):
+        self.price_history: Dict[str, List[float]] = {}
+        self.max_history = 200
+
+    def update_history(self, sym: str, ltp: float):
+        """Track price history for trend analysis."""
+        if sym not in self.price_history:
+            self.price_history[sym] = []
+        self.price_history[sym].append(ltp)
+        if len(self.price_history[sym]) > self.max_history:
+            self.price_history[sym] = self.price_history[sym][-self.max_history:]
+
+    @staticmethod
+    def _estimate_rsi(data: Dict) -> float:
+        """Estimate RSI from today's OHLC data."""
+        ltp = data.get("ltp", 0)
+        hi = data.get("high", ltp)
+        lo = data.get("low", ltp)
+        if hi <= lo:
+            return 50.0
+        return round((ltp - lo) / (hi - lo) * 100, 1)
+
+    def analyze(self, commodity_data: Dict[str, Dict]) -> List[Dict]:
+        """Analyze all commodities and return scored signals."""
+        signals = []
+
+        for sym, data in commodity_data.items():
+            ltp = data.get("ltp", 0)
+            op = data.get("open", ltp)
+            hi = data.get("high", ltp)
+            lo = data.get("low", ltp)
+            prev = data.get("prev_close", op)
+            vol = data.get("volume", 0)
+
+            if ltp <= 0 or op <= 0:
+                continue
+
+            self.update_history(sym, ltp)
+
+            chg_pct = data.get("change_pct", 0)
+            rsi = self._estimate_rsi(data)
+            day_range = ((hi - lo) / op * 100) if op > 0 else 0
+
+            # Calculate trend from history
+            history = self.price_history.get(sym, [])
+            trend = "neutral"
+            trend_strength = 0.0
+            if len(history) >= 5:
+                recent_avg = sum(history[-3:]) / 3
+                past_avg = sum(history[-5:-2]) / 3 if len(history) >= 5 else recent_avg
+                if past_avg > 0:
+                    trend_strength = (recent_avg - past_avg) / past_avg * 100
+                    if trend_strength > 0.3:
+                        trend = "bullish"
+                    elif trend_strength < -0.3:
+                        trend = "bearish"
+
+            # ── Scoring ──
+            score = 0
+            strategies = []
+            reasons = []
+            direction = "BUY"
+
+            # 1. Momentum signal
+            if abs(chg_pct) > 1.0:
+                mom_score = min(25, abs(chg_pct) * 5)
+                score += mom_score
+                strategies.append("Momentum")
+                direction = "BUY" if chg_pct > 0 else "SELL"
+                reasons.append(f"Strong move {chg_pct:+.1f}%")
+
+            # 2. RSI signal
+            if rsi < 25:
+                score += 15
+                strategies.append("Oversold")
+                direction = "BUY"
+                reasons.append(f"RSI oversold ({rsi:.0f})")
+            elif rsi > 75:
+                score += 15
+                strategies.append("Overbought")
+                direction = "SELL"
+                reasons.append(f"RSI overbought ({rsi:.0f})")
+
+            # 3. Trend alignment
+            if (trend == "bullish" and direction == "BUY") or \
+               (trend == "bearish" and direction == "SELL"):
+                score += 10
+                strategies.append("Trend Aligned")
+                reasons.append(f"Trend: {trend} ({trend_strength:+.2f}%)")
+
+            # 4. Volatility play
+            if day_range > 2.0:
+                score += 8
+                strategies.append("High Volatility")
+                reasons.append(f"Day range {day_range:.1f}%")
+
+            # 5. Gap signal
+            if prev > 0:
+                gap = (op - prev) / prev * 100
+                if abs(gap) > 1.0:
+                    score += 10
+                    strategies.append("Gap" if gap > 0 else "Gap Down")
+                    reasons.append(f"Gap {gap:+.1f}%")
+
+            if score < 15:
+                continue
+
+            # Targets
+            atr_pct = max(0.005, day_range / 100)
+            if direction == "BUY":
+                t1 = round(ltp * (1 + atr_pct * 1.5), 2)
+                sl = round(ltp * (1 - atr_pct), 2)
+            else:
+                t1 = round(ltp * (1 - atr_pct * 1.5), 2)
+                sl = round(ltp * (1 + atr_pct), 2)
+
+            rr = abs(t1 - ltp) / abs(sl - ltp) if abs(sl - ltp) > 0 else 0
+
+            signals.append({
+                "symbol": sym,
+                "direction": direction,
+                "score": round(score, 1),
+                "ltp": ltp,
+                "open": op,
+                "high": hi,
+                "low": lo,
+                "change_pct": chg_pct,
+                "volume": vol,
+                "rsi": rsi,
+                "trend": trend,
+                "trend_strength": round(trend_strength, 2),
+                "day_range_pct": round(day_range, 2),
+                "target_1": t1,
+                "stop_loss": sl,
+                "risk_reward": round(rr, 2),
+                "strategies": strategies,
+                "num_strategies": len(strategies),
+                "reasons": reasons,
+                "instrument_type": "COMMODITY",
+                "commodity_sector": data.get("commodity_sector", "Other"),
+                "qty": 1,  # Lot-based for MCX
+                "confidence": min(1.0, score / 80),
+            })
+
+        signals.sort(key=lambda x: x["score"], reverse=True)
+        return signals
 
 
 # ── Intraday Strategies ───────────────────────────────────────────────────────
@@ -912,7 +1200,7 @@ class TradeManager:
         today = datetime.now().strftime("%Y-%m-%d")
         today_closed = [
             t for t in self.trades
-            if t.get("exit_time", "").startswith(today) and t["status"] != "OPEN"
+            if (t.get("exit_time") or "").startswith(today) and t["status"] != "OPEN"
         ]
         # Check consecutive losses
         if len(today_closed) >= self.MAX_CONSECUTIVE_LOSSES:
@@ -922,7 +1210,7 @@ class TradeManager:
                 logger.warning("🛡️ Restarted with consecutive loss breaker ACTIVE")
         # Check daily loss limit
         daily_pnl = sum(t.get("pnl", 0) for t in self.trades
-                        if t.get("entry_time", "").startswith(today))
+                        if (t.get("entry_time") or "").startswith(today))
         max_daily_loss = self.budget * 0.05
         if daily_pnl < -max_daily_loss:
             self._trading_disabled = True
@@ -943,7 +1231,7 @@ class TradeManager:
         today = datetime.now().strftime("%Y-%m-%d")
         today_entries = sum(
             1 for t in self.trades
-            if t.get("entry_time", "").startswith(today)
+            if (t.get("entry_time") or "").startswith(today)
         )
         if today_entries >= self.MAX_TRADES_PER_DAY:
             logger.info(f"Max trades per day ({self.MAX_TRADES_PER_DAY}) reached — rejecting {opp.get('symbol', '?')}")
@@ -977,7 +1265,7 @@ class TradeManager:
             "direction": opp["direction"],
             "instrument_type": opp.get("instrument_type", "EQ"),
             "entry_price": opp["ltp"],
-            "entry_time": now.isoformat(),
+            "entry_time": datetime.now().isoformat(),
             "qty": opp["qty"],
             "target": opp["target_1"],
             "target_2": opp.get("target_2", opp["target_1"]),
@@ -1192,7 +1480,7 @@ class TradeManager:
         today = datetime.now().strftime("%Y-%m-%d")
         today_closed = [
             t for t in self.trades
-            if t.get("exit_time", "").startswith(today) and t["status"] != "OPEN"
+            if (t.get("exit_time") or "").startswith(today) and t["status"] != "OPEN"
         ]
         # Check last N trades
         if len(today_closed) >= self.MAX_CONSECUTIVE_LOSSES:
@@ -1211,7 +1499,7 @@ class TradeManager:
         today = datetime.now().strftime("%Y-%m-%d")
         today_trades = [
             t for t in self.trades
-            if t.get("entry_time", "").startswith(today)
+            if (t.get("entry_time") or "").startswith(today)
         ]
         
         closed = [t for t in today_trades if t["status"] != "OPEN"]
@@ -1276,6 +1564,16 @@ class TradingBot:
         self.adaptive_engine = AdaptiveStrategyEngine(journal=self.journal)
         self.regime_detector = MarketRegimeDetector()
         self.fno_scanner = FnOScanner()
+        self.commodity_analyzer = CommodityAnalyzer()  # ← ADD THIS
+        
+        # ── v3.0 Enhanced Components ──
+        self.candle_manager = CandleManager(max_candles=200)
+        self.ensemble_scorer = EnsembleScorer()
+        self.micro_learner = MicroLearner(persistence_dir=".")
+        self.cost_model = TransactionCostModel(trade_type="equity_intraday")
+        self.correlation_mgr = CorrelationRiskManager()
+        self.mtf_analyzer = MultiTimeframeAnalyzer()
+        self.mtf_analyzer.set_candle_manager(self.candle_manager)
         
         # ── Core components ──
         self.scanner = MarketScanner(self.cfg, self.adaptive_engine)
@@ -1324,11 +1622,14 @@ class TradingBot:
 
     def start(self):
         logger.info("=" * 80)
-        logger.info("🤖  ANGEL ONE SELF-LEARNING TRADING BOT v2.0")
+        logger.info("🤖  ANGEL ONE SELF-LEARNING TRADING BOT v3.0")
+        logger.info("   ⚡ Enhanced: Real Indicators | Ensemble Scoring | MTF Confluence")
+        logger.info("   ⚡ Enhanced: Correlation Risk | Micro-Learning | Transaction Costs")
         logger.info("=" * 80)
         logger.info(f"💰 Budget: ₹{self.budget:,}")
         logger.info(f"📊 Stocks: {len(FNO_TOKENS)} F&O + {len(INDEX_TOKENS)} indices")
         logger.info(f"🧠 Learning: ON | Journal: {len(self.journal.trades)} past trades")
+        logger.info(f"🔬 Micro-Learner: {self.micro_learner._total_trades_processed} trades processed")
         
         # Print what the bot has learned
         summary = self.journal.get_learning_summary()
@@ -1347,6 +1648,14 @@ class TradingBot:
                 top_mistakes = sorted(summary["common_mistakes"].items(), 
                                      key=lambda x: x[1], reverse=True)[:3]
                 logger.info(f"🔍 Common mistakes: {', '.join(f'{k}({v})' for k, v in top_mistakes)}")
+            # v3.0: Print micro-learner insights
+            micro_summary = self.micro_learner.get_learning_summary()
+            bad_hours = micro_summary.get("bad_hours", [])
+            if bad_hours:
+                logger.info(f"⏰ Bad hours (learned): {bad_hours}")
+            opt_score = micro_summary.get("optimal_score_threshold", 0)
+            if opt_score > 0:
+                logger.info(f"📊 Optimal score threshold (micro-learned): {opt_score:.0f}")
         else:
             logger.info("🆕 First run — bot will start learning from this session")
         
@@ -1359,6 +1668,9 @@ class TradingBot:
                 self.scanner.set_auth(self.auth)
                 if self.auth.smart_api:
                     self.fno_scanner.set_api(self.auth.smart_api)
+                    # v3.0: Connect CandleManager to API
+                    self.candle_manager.set_api(self.auth.smart_api)
+                    logger.info("📊 CandleManager connected for real indicators")
 
         if is_market_hours():
             self._do_scan()
@@ -1410,11 +1722,22 @@ class TradingBot:
                         f"(confidence: {market_context['regime_confidence']:.2f}) | "
                         f"Volatility: {market_context['volatility']:.2f}%")
             
+            # v3.0: Fetch candle data for top movers (limit API calls)
+            self._fetch_candle_data_for_movers(raw_data)
+            
+            # v3.0: Update correlation manager with live prices
+            for sym, data in raw_data.items():
+                if data.get("instrument_type") != "INDEX":
+                    self.correlation_mgr.update_price(sym, data.get("ltp", 0))
+            
             # 3. Update P&L for existing trades with trailing stops
             summary = self.tm.update_pnl(raw_data, market_context)
             logger.info(f"💰 P&L: Open={summary['open_trades']} | "
                        f"Live P&L=₹{summary['total_pnl']:.2f} | "
                        f"Closed today: W{summary.get('wins', 0)}/L{summary.get('losses', 0)}")
+            
+            # v3.0: Feed micro-learner with any trades that just closed
+            self._feed_micro_learner(market_context)
             
             # Check for consecutive loss circuit breaker
             self.tm.check_consecutive_losses()
@@ -1428,6 +1751,12 @@ class TradingBot:
             if now_time >= f"{max_entry_hour}:00":
                 logger.info(f"⏰ Past entry cutoff ({max_entry_hour}:00), monitoring only")
                 return
+            
+            # v3.0: Check micro-learned bad hours
+            current_hour = datetime.now().hour
+            if self.micro_learner.is_bad_hour(current_hour):
+                logger.info(f"⏰ Hour {current_hour} is historically bad — reducing entry aggressiveness")
+                market_context["bad_hour"] = True
 
             # 5. Scan equity opportunities
             opps = self.scanner.opportunities(
@@ -1435,12 +1764,26 @@ class TradingBot:
                 market_context=market_context
             )
             
+            # v3.0: Enhance opportunities with ensemble scoring, MTF, and correlation checks
+            opps = self._enhance_opportunities_v3(opps, market_context)
+            
             # 6. Scan F&O opportunities
             fno_opps = self.fno_scanner.scan_all(raw_data, market_context)
             
-            # 7. Combine and display
-            all_opps = opps + fno_opps
-            all_opps.sort(key=lambda x: x.get("score", 0), reverse=True)
+            # 7. Scan MCX Commodity opportunities (if market hours)
+            commodity_opps = []
+            if is_commodity_market_hours():
+                try:
+                    commodity_raw = self.scanner.fetcher.fetch_commodities()
+                    if commodity_raw:
+                        commodity_opps = self.commodity_analyzer.analyze(commodity_raw)
+                        logger.info(f"📦 Commodity scan: {len(commodity_raw)} prices, {len(commodity_opps)} signals")
+                except Exception as e:
+                    logger.warning(f"Commodity scan error: {e}")
+            
+            # 8. Combine and display
+            all_opps = opps + fno_opps + commodity_opps
+            all_opps.sort(key=lambda x: x.get("ensemble_score", x.get("score", 0)), reverse=True)
             
             if all_opps:
                 # Auto-track top opportunities with GLOBAL position limit
@@ -1469,7 +1812,6 @@ class TradingBot:
                 eq_entered = 0
                 fno_entered = 0
                 max_eq = min(3, remaining_capacity)
-                max_fno = min(2, remaining_capacity - eq_entered)  # Updated below
                 
                 for o in all_opps:
                     # Hard stop: never exceed global position limit
@@ -1477,8 +1819,31 @@ class TradingBot:
                     if total_entered >= remaining_capacity:
                         break
                     
-                    if o.get("score", 0) < self.adaptive_engine.params.high_confidence_score:
+                    # v3.0: Use ensemble score if available, otherwise fall back to raw score
+                    entry_score = o.get("ensemble_score", o.get("score", 0))
+                    if entry_score < self.adaptive_engine.params.high_confidence_score:
                         continue
+                    
+                    # v3.0: Skip opportunities with SKIP/WATCH ensemble recommendation
+                    ens_rec = o.get("ensemble_recommendation", "ENTER")
+                    if ens_rec in ("SKIP", "WATCH"):
+                        continue
+                    
+                    # v3.0: Check correlation risk before entering
+                    sym = o.get("symbol", "")
+                    proposed_value = o.get("ltp", 0) * o.get("qty", 1)
+                    corr_check = self.correlation_mgr.can_enter_position(
+                        sym, proposed_value, self.budget
+                    )
+                    if not corr_check["allowed"]:
+                        logger.info(f"🔗 Correlation block: {sym} — {corr_check['reason']}")
+                        continue
+                    
+                    # v3.0: Apply correlation-based size adjustment
+                    size_mult = corr_check.get("adjustments", {}).get("size_factor", 1.0)
+                    if size_mult < 1.0:
+                        o["qty"] = max(1, int(o["qty"] * size_mult))
+                        logger.info(f"🔗 Size adjusted for {sym}: ×{size_mult:.0%} (correlation)")
                     
                     instr = o.get("instrument_type", "EQ")
                     
@@ -1486,29 +1851,36 @@ class TradingBot:
                         result = self.tm.track_opportunity(o, market_context)
                         if result:
                             eq_entered += 1
+                            # v3.0: Update correlation manager with new position
+                            self.correlation_mgr.update_position(
+                                sym, o.get("qty", 1), proposed_value, o.get("direction", "BUY")
+                            )
                     elif instr in ("OPT", "FUT") and fno_entered < min(2, remaining_capacity - eq_entered):
                         result = self.tm.track_opportunity(o, market_context)
                         if result:
                             fno_entered += 1
 
                 # Display opportunities
-                print(f"\n{'='*100}")
+                print(f"\n{'='*110}")
                 print(f"🎯 {len(all_opps)} OPPORTUNITIES | "
                       f"Regime: {market_context['regime']} | "
                       f"Min Score: {self.adaptive_engine.params.min_score:.0f} | "
+                      f"Sectors: {len(self.correlation_mgr.get_sector_exposure())} | "
                       f"{datetime.now().strftime('%H:%M:%S')}")
-                print(f"{'='*100}")
+                print(f"{'='*110}")
                 
-                # Equity
+                # Equity — with v3.0 ensemble info
                 eq_opps = [o for o in all_opps if o.get("instrument_type") == "EQ"]
                 if eq_opps:
                     print(f"\n  📈 EQUITY ({len(eq_opps)}):")
                     for i, o in enumerate(eq_opps[:10], 1):
                         st = ", ".join(o["strategies"][:2])
                         conf = o.get("confidence", 0)
+                        ens = o.get("ensemble_score", o.get("score", 0))
+                        mtf = o.get("mtf_recommendation", "-")
                         print(f"    {i:>2}. {o['symbol']:<14} {o['direction']:<4} "
-                              f"₹{o['ltp']:<10.2f} Score={o['score']:<5.0f} "
-                              f"Conf={conf:<4.2f} "
+                              f"₹{o['ltp']:<10.2f} Ens={ens:<5.0f} "
+                              f"Conf={conf:<4.2f} MTF={mtf:<10} "
                               f"T1=₹{o['target_1']:<9.2f} SL=₹{o['stop_loss']:<9.2f} [{st}]")
                 
                 # F&O
@@ -1521,15 +1893,225 @@ class TradingBot:
                               f"Score={o.get('score', 0):<5.0f} "
                               f"T=₹{o['target_1']:<9.2f} SL=₹{o['stop_loss']:<9.2f} [{st}]")
                 
-                print(f"{'='*100}\n")
+                # Commodities
+                commodity_display = [o for o in all_opps if o.get("instrument_type") == "COMMODITY"]
+                if commodity_display:
+                    print(f"\n  📦 COMMODITIES ({len(commodity_display)}):")
+                    for i, o in enumerate(commodity_display[:5], 1):
+                        st = ", ".join(o.get("strategies", [])[:2])
+                        sector = o.get("commodity_sector", "Other")
+                        print(f"    {i:>2}. {o['symbol']:<14} {o['direction']:<4} "
+                              f"₹{o['ltp']:<10.2f} Score={o.get('score', 0):<5.0f} "
+                              f"T=₹{o['target_1']:<9.2f} SL=₹{o['stop_loss']:<9.2f} "
+                              f"[{sector}] [{st}]")
+                
+                # v3.0: Correlation risk summary
+                risk_summary = self.correlation_mgr.get_risk_summary()
+                if risk_summary["total_positions"] > 0:
+                    print(f"\n  🔗 Portfolio Risk: {risk_summary['total_positions']} positions | "
+                          f"Exposure: ₹{risk_summary['total_exposure']:,.0f} | "
+                          f"Top Sector: {risk_summary['top_sector']}")
+                
+                print(f"{'='*110}\n")
             else:
-                logger.info("No opportunities above threshold")
+                # Always print a scan summary even when no signals pass the threshold
+                print(f"\n{'='*90}")
+                print(f"📊 SCAN #{self.scan_count} | {datetime.now().strftime('%H:%M:%S')} "
+                      f"| Regime: {market_context.get('regime','?')} "
+                      f"| Volatility: {market_context.get('volatility',0):.2f}% "
+                      f"| Min Score: {self.adaptive_engine.params.min_score:.0f}")
+                print(f"   Fetched: {len(raw_data)} stocks | "
+                      f"F&O signals: {len(fno_opps)} | "
+                      f"Commodity signals: {len(commodity_opps)}")
+                print(f"   ⚠️  No equity signals above score threshold ({self.adaptive_engine.params.min_score:.0f})")
+                # Show top 5 movers anyway
+                movers = sorted(
+                    [d for d in raw_data.values() if d.get("instrument_type") != "INDEX"],
+                    key=lambda x: abs(x.get("change_pct", 0)), reverse=True
+                )[:5]
+                if movers:
+                    print(f"   Top movers:")
+                    for m in movers:
+                        arrow = "▲" if m.get("change_pct", 0) >= 0 else "▼"
+                        print(f"     {arrow} {m['symbol']:<14} ₹{m['ltp']:<10.2f} {m.get('change_pct', 0):+.2f}%")
+                # Show indices
+                indices = {s: d for s, d in raw_data.items() if d.get("instrument_type") == "INDEX"}
+                if indices:
+                    idx_str = "  |  ".join(
+                        f"{s}: {d['ltp']:.0f} ({d.get('change_pct', 0):+.2f}%)"
+                        for s, d in indices.items()
+                    )
+                    print(f"   Indices: {idx_str}")
+                print(f"{'='*90}\n")
                 
         except Exception as e:
             logger.error(f"Scan error: {e}")
             traceback.print_exc()
         finally:
             self._save_state()  # Persist state after every scan
+
+    # ── v3.0: New helper methods ────────────────────────────────────────────────
+
+    def _fetch_candle_data_for_movers(self, raw_data: Dict):
+        """Fetch candle data for top movers to compute real indicators."""
+        try:
+            # Sort by absolute change to prioritize active stocks
+            sorted_syms = sorted(
+                [(s, d) for s, d in raw_data.items() if d.get("instrument_type") != "INDEX"],
+                key=lambda x: abs(x[1].get("change_pct", 0)),
+                reverse=True,
+            )
+            
+            # Fetch candles for top 10 movers only (Angel One rate limit: ~1 req/sec)
+            fetched = 0
+            for sym, data in sorted_syms[:10]:
+                token = FNO_TOKENS.get(sym)
+                if not token:
+                    continue
+                candles = self.candle_manager.fetch_candles(
+                    sym, token, exchange="NSE", interval="5m", lookback_days=3
+                )
+                if candles:
+                    fetched += 1
+                time.sleep(0.8)  # Respect Angel One rate limit (AB1019 prevention)
+            
+            if fetched > 0:
+                logger.info(f"📊 Fetched 5m candles for {fetched} stocks")
+                
+        except Exception as e:
+            logger.debug(f"Candle fetch batch error: {e}")
+
+    def _enhance_opportunities_v3(self, opps: List[Dict], market_context: Dict) -> List[Dict]:
+        """
+        v3.0: Enhance each opportunity with:
+        1. Real candle-based indicators (RSI, ATR, VWAP, etc.)
+        2. Ensemble scoring (rule + ML + indicator confluence + regime + journal)
+        3. Multi-timeframe confluence check
+        """
+        enhanced = []
+        regime = market_context.get("regime", "unknown")
+        
+        for opp in opps:
+            sym = opp.get("symbol", "")
+            ltp = opp.get("ltp", 0)
+            direction = opp.get("direction", "BUY")
+            
+            # 1. Get real candle indicators
+            candle_indicators = self.candle_manager.compute_all_indicators(sym, "5m")
+            
+            # Override proxy RSI with real RSI if available
+            real_rsi = candle_indicators.get("rsi_14")
+            if real_rsi is not None:
+                opp["rsi"] = round(real_rsi, 1)
+                opp["rsi_source"] = "candle_14p"  # Mark as real RSI
+            
+            # Add ATR-based targets if available
+            atr = candle_indicators.get("atr_14")
+            if atr and atr > 0:
+                opp["atr"] = round(atr, 2)
+                opp["atr_pct"] = candle_indicators.get("atr_pct", 0)
+            
+            # Add VWAP info
+            vwap = candle_indicators.get("vwap")
+            if vwap:
+                opp["vwap"] = round(vwap, 2)
+                opp["vwap_deviation"] = candle_indicators.get("vwap_deviation", 0)
+            
+            # 2. Ensemble scoring
+            strategy_name = opp.get("strategies", [""])[0] if opp.get("strategies") else ""
+            journal_adj = self.micro_learner.get_strategy_weight(strategy_name) - 1.0  # Convert to adjustment
+            
+            ensemble_result = self.ensemble_scorer.score_opportunity(
+                rule_score=opp.get("score", 0),
+                ml_probability=None,  # TODO: connect ModelTrainer predictions
+                candle_indicators=candle_indicators,
+                regime=regime,
+                strategy_name=strategy_name,
+                journal_adjustment=journal_adj,
+                ltp=ltp,
+            )
+            
+            opp["ensemble_score"] = ensemble_result["ensemble_score"]
+            opp["ensemble_confidence"] = ensemble_result["confidence"]
+            opp["ensemble_recommendation"] = ensemble_result["recommendation"]
+            opp["ensemble_components"] = ensemble_result["components"]
+            
+            # 3. Multi-timeframe confluence
+            mtf_result = self.mtf_analyzer.analyze(sym, direction)
+            opp["mtf_confluence"] = mtf_result["confluence_score"]
+            opp["mtf_recommendation"] = mtf_result["recommendation"]
+            
+            # Downgrade ensemble score if MTF is divergent
+            if mtf_result["recommendation"] in ("DIVERGENT", "COUNTER_TREND"):
+                opp["ensemble_score"] *= 0.7
+                opp["ensemble_recommendation"] = "WATCH"
+            elif mtf_result["recommendation"] == "STRONG_CONFLUENCE":
+                opp["ensemble_score"] = min(100, opp["ensemble_score"] * 1.1)
+            
+            # 4. Transaction cost check — is the expected profit worth the costs?
+            costs = self.cost_model.calculate_costs(
+                buy_price=ltp, sell_price=opp.get("target_1", ltp),
+                quantity=opp.get("qty", 1)
+            )
+            opp["est_costs"] = round(costs.total_cost, 2)
+            opp["breakeven_pct"] = costs.breakeven_move_pct
+            
+            # Skip if costs eat more than 40% of expected profit
+            expected_profit = opp.get("max_profit", 0)
+            if expected_profit > 0 and costs.total_cost > expected_profit * 0.4:
+                opp["ensemble_recommendation"] = "SKIP"
+                opp["skip_reason"] = "transaction_costs_too_high"
+            
+            enhanced.append(opp)
+        
+        # Re-sort by ensemble score
+        enhanced.sort(key=lambda x: x.get("ensemble_score", 0), reverse=True)
+        return enhanced
+
+    def _feed_micro_learner(self, market_context: Dict):
+        """Feed the micro-learner with recently closed trades."""
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            for t in self.trades if hasattr(self, 'trades') else self.tm.trades:
+                if t.get("status") == "OPEN":
+                    continue
+                # Check if this trade has already been fed to micro-learner
+                if t.get("_micro_learned"):
+                    continue
+                # Only process today's closures
+                exit_time = t.get("exit_time", "")
+                if not exit_time or not exit_time.startswith(today):
+                    continue
+                
+                self.micro_learner.learn_from_trade({
+                    "symbol": t.get("symbol", ""),
+                    "strategy": t.get("strategies", [""])[0] if t.get("strategies") else "unknown",
+                    "pnl": t.get("pnl", 0),
+                    "entry_price": t.get("entry_price", 0),
+                    "exit_price": t.get("exit_price", 0),
+                    "entry_time": t.get("entry_time", ""),
+                    "exit_time": exit_time,
+                    "regime": market_context.get("regime", "unknown"),
+                    "signal_score": t.get("score", 0),
+                    "sl_hit": t.get("status") == "SL_HIT",
+                    "target_hit": "TARGET" in t.get("status", ""),
+                    "qty": t.get("qty", 0),
+                })
+                
+                # v3.0: Also record in ensemble scorer
+                if t.get("_ensemble_signal"):
+                    self.ensemble_scorer.record_outcome(
+                        t["_ensemble_signal"], t.get("pnl", 0)
+                    )
+                
+                # v3.0: Update correlation manager
+                self.correlation_mgr.remove_position(t.get("symbol", ""))
+                
+                # Mark as processed
+                t["_micro_learned"] = True
+                
+        except Exception as e:
+            logger.debug(f"Micro-learner feed error: {e}")
 
     def _end_of_day_learning(self):
         """End of day: run the learning cycle."""
@@ -1539,12 +2121,15 @@ class TradingBot:
         self._learning_done_today = True
         self._save_state()  # Persist learning flag before long operation
         logger.info("=" * 80)
-        logger.info("🧠 END-OF-DAY LEARNING CYCLE")
+        logger.info("🧠 END-OF-DAY LEARNING CYCLE (v3.0)")
         logger.info("=" * 80)
         
         try:
             # Run the adaptive engine's learning
             report = self.adaptive_engine.learn_from_session()
+            
+            # v3.0: Adapt ensemble weights based on accumulated outcomes
+            self.ensemble_scorer.adapt_weights(min_samples=10)
             
             # Log the learning report
             if report:
@@ -1572,22 +2157,69 @@ class TradingBot:
                     for lesson in journal_summary["lessons"][-3:]:
                         logger.info(f"     - {lesson}")
             
+            # v3.0: Log micro-learner and ensemble insights
+            micro_summary = self.micro_learner.get_learning_summary()
+            logger.info(f"\n  🔬 MICRO-LEARNER INSIGHTS:")
+            logger.info(f"   Trades processed: {micro_summary['total_trades_processed']}")
+            logger.info(f"   Optimal score threshold: {micro_summary['optimal_score_threshold']:.0f}")
+            logger.info(f"   SL multiplier rec: {micro_summary['sl_multiplier_rec']:.2f}x")
+            logger.info(f"   Target multiplier rec: {micro_summary['target_multiplier_rec']:.2f}x")
+            if micro_summary.get('bad_hours'):
+                logger.info(f"   Bad hours: {micro_summary['bad_hours']}")
+            
+            ens_summary = self.ensemble_scorer.get_summary()
+            logger.info(f"\n  🎯 ENSEMBLE SCORER:")
+            logger.info(f"   Weights: {json.dumps({k: round(v, 3) for k, v in ens_summary['weights'].items()})}")
+            logger.info(f"   Total scored: {ens_summary['total_scored']}")
+            
+            # v3.0: Log strategy × regime heatmap
+            heatmap = self.micro_learner.get_strategy_regime_heatmap()
+            if heatmap:
+                logger.info(f"\n  📊 STRATEGY × REGIME WIN RATES:")
+                for strat, regimes in heatmap.items():
+                    regime_str = ", ".join(f"{r}: {wr:.0%}" for r, wr in regimes.items())
+                    logger.info(f"   {strat}: {regime_str}")
+            
             # Save learning report to file
+            report_data = report or {}
+            report_data["v3_micro_learner"] = micro_summary
+            report_data["v3_ensemble"] = ens_summary
+            report_data["v3_strategy_regime_heatmap"] = heatmap
+            report_data["v3_hourly_heatmap"] = self.micro_learner.get_hourly_heatmap()
+            report_data["v3_correlation_risk"] = self.correlation_mgr.get_risk_summary()
+            
             report_file = Path("data/journal") / f"learning_report_{datetime.now().strftime('%Y%m%d')}.json"
             with open(report_file, 'w') as f:
-                json.dump(report, f, indent=2, default=str)
+                json.dump(report_data, f, indent=2, default=str)
             
             logger.info(f"📝 Learning report saved to {report_file}")
             
             # ── DAILY SUMMARY ──
             daily = self.tm.get_daily_summary()
+            
+            # v3.0: Add net P&L after transaction costs
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            total_costs = 0.0
+            for t in self.tm.trades:
+                if (t.get("exit_time") or "").startswith(today_str) and t.get("status") != "OPEN":
+                    entry_p = t.get("entry_price", 0)
+                    exit_p = t.get("exit_price", entry_p)
+                    qty = t.get("qty", 1)
+                    if entry_p > 0 and exit_p > 0:
+                        costs = self.cost_model.calculate_costs(entry_p, exit_p, qty)
+                        total_costs += costs.total_cost
+            
+            net_pnl = daily["total_pnl"] - total_costs
+            
             logger.info("=" * 80)
-            logger.info("📋 DAILY SUMMARY")
+            logger.info("📋 DAILY SUMMARY (v3.0)")
             logger.info("=" * 80)
             logger.info(f"   Date: {daily['date']}")
             logger.info(f"   Trades: {daily['total_trades']} ({daily['closed']} closed, {daily['still_open']} open)")
             logger.info(f"   Wins/Losses: {daily['wins']}/{daily['losses']} (Win Rate: {daily['win_rate']}%)")
-            logger.info(f"   Total P&L: ₹{daily['total_pnl']}")
+            logger.info(f"   Gross P&L: ₹{daily['total_pnl']:.2f}")
+            logger.info(f"   Transaction Costs: ₹{total_costs:.2f}")
+            logger.info(f"   Net P&L: ₹{net_pnl:.2f}")
             logger.info(f"   Realized: ₹{daily['realized_pnl']} | Unrealized: ₹{daily['unrealized_pnl']}")
             logger.info(f"   Biggest Win: ₹{daily['biggest_win']} | Biggest Loss: ₹{daily['biggest_loss']}")
             logger.info(f"   Strategies: {', '.join(daily['strategies_used']) if daily['strategies_used'] else 'None'}")
@@ -1595,7 +2227,9 @@ class TradingBot:
                 logger.info(f"   ⚠️ Trading was DISABLED by circuit breaker")
             logger.info("=" * 80)
             
-            # Save daily summary
+            # Save daily summary with v3.0 enhancements
+            daily["transaction_costs"] = round(total_costs, 2)
+            daily["net_pnl"] = round(net_pnl, 2)
             summary_file = Path("data/journal") / f"daily_summary_{daily['date']}.json"
             with open(summary_file, 'w') as f:
                 json.dump(daily, f, indent=2)

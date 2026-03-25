@@ -1,0 +1,353 @@
+PROJECT OVERVIEW
+I am building a self-learning AI-powered intraday trading bot for Indian markets. It trades Equity, Futures & Options (NFO), Commodities (MCX), and Currency Derivatives (CDS) via Angel One SmartAPI. The bot has 50+ strategies, ML pipeline, regime detection, adaptive learning, and a dashboard. It is currently a paper-trading bot using real market data.
+
+I am going through every single source file in the project and having it enhanced to production quality. The goal is a fully working, low-risk, maximum-accuracy trading system.
+
+KEY PRINCIPLES FOR ALL ENHANCEMENTS
+LOW RISK FIRST — Capital preservation over profit. Even if profit is small, never take excessive risk.
+Everything must actually work — No placeholders, no broken imports, no stub logic. Every function must be complete.
+F&O + Commodity support — Every component must handle Equity, Futures, Options (NIFTY/BANKNIFTY/Stock), and MCX commodities (Gold, Silver, Crude, Natural Gas, etc.) with correct lot sizes, tick sizes, margin, expiry, settlement.
+Segment-aware — Market hours differ (NSE 9:15-15:30, MCX 9:00-23:30, CDS 9:00-17:00). Transaction costs differ. Risk limits differ per segment.
+Self-learning — The bot learns from every trade: strategy weights, SL/target multipliers, score thresholds, best/worst hours, regime-specific behavior. All learning persists to disk.
+Thread-safe, production-grade — Proper error handling, logging, edge cases, concurrent access patterns.
+Backward compatible — Old code that imports from enhanced files must not break. Keep aliases and legacy fields where needed.
+Inter-file consistency — All files must use the same models, event types, config structures. No duplicate definitions that contradict each other.
+FULL PROJECT FOLDER STRUCTURE
+text
+
+Trading bot/
+├── config/
+│   ├── angel_one_config.json
+│   └── trading_development.json
+├── data/
+│   ├── journal/
+│   │   ├── daily_stats.json
+│   │   ├── daily_summary_2026-03-12.json
+│   │   ├── daily_summary_2026-03-16.json
+│   │   ├── learned_rules.json
+│   │   ├── learning_report_20260223.json
+│   │   ├── learning_report_20260224.json
+│   │   ├── learning_report_20260312.json
+│   │   ├── learning_report_20260316.json
+│   │   ├── strategy_stats.json
+│   │   └── trades_journal.json
+│   ├── models/
+│   │   ├── adaptive_params.json
+│   │   ├── ai_population.json
+│   │   └── composite_strategies.json
+│   └── bot_state.json
+├── deploy/
+│   ├── setup.sh
+│   ├── trading-bot.service
+│   └── trading-dashboard.service
+├── examples/
+│   └── test_risk_management.py
+├── strategies/
+│   ├── fno/
+│   │   ├── __init__.py
+│   │   ├── banknifty_options_straddle.py
+│   │   ├── nifty_futures_breakout.py
+│   │   └── stock_futures_momentum.py
+│   ├── intraday_breakout/
+│   │   ├── __init__.py
+│   │   ├── atr_breakout.py
+│   │   ├── bb_breakout.py
+│   │   ├── keltner_breakout.py
+│   │   ├── orb.py
+│   │   ├── pdh_pdl_break.py
+│   │   ├── pivot_breakout.py
+│   │   ├── range_breakout.py
+│   │   ├── squeeze_breakout.py
+│   │   ├── volatility_expansion.py
+│   │   ├── volume_breakout.py
+│   │   ├── vwap_breakout.py
+│   │   └── vwap_reclaim.py
+│   ├── intraday_reversion/
+│   │   ├── __init__.py
+│   │   ├── bb_mean_reversion.py
+│   │   ├── keltner_reversion.py
+│   │   ├── pivot_reversal.py
+│   │   ├── rsi_reversion.py
+│   │   ├── sr_bounce.py
+│   │   ├── stochastic_reversion.py
+│   │   ├── vwap_reversion.py
+│   │   └── zscore_reversion.py
+│   ├── intraday_trend/
+│   │   ├── __init__.py
+│   │   ├── adx_trend_filter.py
+│   │   ├── dmi.py
+│   │   ├── donchian_breakout.py
+│   │   ├── ema_crossover.py
+│   │   ├── ema_pullback.py
+│   │   ├── heikin_ashi.py
+│   │   ├── ichimoku.py
+│   │   ├── ma_ribbon.py
+│   │   ├── macd.py
+│   │   ├── parabolic_sar.py
+│   │   ├── sma_crossover.py
+│   │   └── supertrend.py
+│   ├── price_action/
+│   │   ├── __init__.py
+│   │   ├── break_retest.py
+│   │   ├── channel_trading.py
+│   │   ├── doji.py
+│   │   ├── engulfing.py
+│   │   ├── hammer.py
+│   │   ├── inside_bar.py
+│   │   ├── pin_bar.py
+│   │   ├── shooting_star.py
+│   │   └── trendline_break.py
+│   ├── volume/
+│   │   ├── __init__.py
+│   │   ├── accumulation_distribution.py
+│   │   ├── obv_strategy.py
+│   │   └── volume_price_analysis.py
+│   ├── __init__.py
+│   ├── base.py
+│   └── registry.py
+├── trading_bot/
+│   ├── analysis/
+│   │   ├── __init__.py
+│   │   ├── indicators.py
+│   │   ├── multi_timeframe.py
+│   │   └── technical_analyzer.py
+│   ├── backtesting/
+│   │   ├── __init__.py
+│   │   └── backtest_engine.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py                    ✅ ENHANCED
+│   │   ├── events.py                    ✅ ENHANCED
+│   │   ├── logging.py                   ⬜ PENDING
+│   │   └── models.py                    ⬜ PENDING
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── angel_one_data_feed.py
+│   │   ├── candle_manager.py
+│   │   ├── database.py
+│   │   ├── live_data_feed.py
+│   │   └── market_feed.py
+│   ├── engine/
+│   │   ├── __init__.py
+│   │   └── trading_engine.py
+│   ├── execution/
+│   │   ├── __init__.py
+│   │   ├── angel_one_broker.py
+│   │   ├── broker_interface.py
+│   │   ├── new.py
+│   │   ├── order_manager.py
+│   │   ├── position_manager.py
+│   │   └── zerodha_broker.py
+│   ├── ml/
+│   │   ├── __init__.py
+│   │   ├── adaptive_strategy_engine.py
+│   │   ├── ensemble_scorer.py
+│   │   ├── feature_engineering.py
+│   │   ├── fno_scanner.py
+│   │   ├── market_intelligence.py
+│   │   ├── micro_learner.py
+│   │   ├── model_trainer.py
+│   │   ├── regime_detector.py
+│   │   ├── reinforcement_learning.py
+│   │   ├── strategy_generator.py
+│   │   └── trade_journal.py
+│   ├── monitoring/
+│   │   └── __init__.py
+│   ├── risk/
+│   │   ├── __init__.py
+│   │   ├── adaptive_stop_manager.py
+│   │   ├── correlation_manager.py
+│   │   ├── enhanced_position_sizer.py
+│   │   ├── portfolio_manager.py
+│   │   ├── position_sizer.py
+│   │   ├── risk_manager.py
+│   │   └── transaction_costs.py
+│   ├── strategy/
+│   │   ├── __init__.py
+│   │   ├── ai_strategy.py
+│   │   ├── base.py
+│   │   ├── mean_reversion.py
+│   │   ├── momentum.py
+│   │   └── strategy_engine.py
+│   └── __init__.py
+├── .env
+├── .env.example
+├── angel_one_auth_service.py
+├── continuous_trading_bot.py            ← MAIN ENTRY POINT
+├── dashboard.html
+├── dashboard.py
+├── get_mcx_tokens.py
+├── requirements.txt
+├── run.py
+└── test_enhanced_risk_management.py
+WHAT THE BOT DOES (FROM README)
+Self-learning intraday bot v2.0 — learns from every trade, gets smarter over time
+Markets: 130+ F&O stocks scanned every 5 min, NIFTY/BANKNIFTY options (directional + straddles), stock futures, MCX commodities
+Strategies: 8 equity strategies + 4 options strategies + 3 futures strategies, organized into 6 categories (breakout, trend, reversion, price_action, volume, fno)
+Self-learning engine:
+Adaptive strategy weights learned from outcomes
+Dynamic SL based on volatility + learned multiplier
+Adaptive targets + trailing stops
+Kelly criterion position sizing scaled by confidence
+Learned optimal threshold per regime
+Avoids historically bad hours
+Regime-aware position limits
+End-of-day learning cycle with mistake classification
+Mistake classification: tight_sl, wrong_direction, late_entry, weak_signal, low_volatility_entry, premature_exit
+Risk management: Max 5% daily loss, 2% per-trade Kelly-scaled, trailing stops, partial exits, EOD auto square-off at 15:25
+Currently paper trading — simulates trades, uses real Angel One market data
+INTEGRATION GUIDE SUMMARY (Enhanced Risk Management)
+The system has a detailed integration guide for risk management with:
+
+Config sections: risk_limits, position_sizing, stop_loss in JSON config
+
+Position sizing: Kelly criterion with regime and confidence inputs
+
+Stop-loss system: Multi-layered:
+
+Initial adaptive stop (ATR + support/resistance + volatility)
+Trailing stops with ratchet mechanism
+Time-based stops (no-profit timeout 30min, afternoon tightening 14:30, force exit 15:20)
+Volatility-adjusted multipliers
+Trading engine integration:
+
+risk_manager.calculate_position_size(signal, balance, positions, regime, confidence, atr)
+risk_manager.calculate_initial_stop_loss(entry, direction, atr, s/r, volatility)
+risk_manager.update_stop_loss(position, current_price, atr, volatility) in monitoring loop
+Regime detection with 3-bar hysteresis to avoid whipsawing
+SYSTEM IMPROVEMENT PLAN SUMMARY
+Architecture target: 5-layer system — Data Ingestion → Feature Engineering → Multi-Model Ensemble → Intelligent Decision Engine → Execution & Monitoring
+
+ML targets: LSTM price predictor, XGBoost signal classifier, Transformer for patterns, DQN for execution, meta-learning system
+
+5 strategies to add: Opening Range Breakout with ML, VWAP Mean Reversion with Volume Profile, Momentum Burst with Order Flow, Gap Fill with Probability, Liquidity Sweep Reversal
+
+Risk framework: 4-layer (Pre-Trade → Dynamic Sizing → Adaptive SL → Portfolio Controls), circuit breakers at 2%/3% daily loss, max 3 consecutive losses, correlation limits 0.7
+
+Performance targets: Win rate 60-65%, profit factor 2.0+, Sharpe >2.0, max drawdown 5%, daily return ~1% on ₹25k capital, execution <50ms, false signals down to 20%
+
+Transaction cost reality: ~0.06% round trip, need >0.15% profit minimum, slippage 0.05-0.1%
+
+Learning cycles: Per-trade incremental, end-of-day batch, weekly full retrain, monthly architecture review
+
+FILES ALREADY ENHANCED
+1. trading_bot/core/config.py ✅
+Complete rewrite from a fragile Pydantic v1/v2 try-except setup to pure dataclasses + JSON + env vars. Now contains:
+
+Enums: Environment, Segment (NSE/BSE/NFO/MCX/CDS/BFO), InstrumentType, MarketRegime, PositionSizingMethod, StopLossMethod, TrailingMethod
+MarketHours: Frozen dataclass with presets for NSE, NFO, MCX, CDS — each knows open/close, entry cutoff, tighten time, force exit, minutes-to-close
+TransactionCosts: Full cost model per segment (equity intraday/delivery, futures, options, MCX, CDS) with round_trip_cost() and breakeven_move_pct()
+RiskLimitsConfig: Portfolio-level + position-level risk, segment caps, consecutive-loss circuit-breaker with recovery, regime multipliers
+PositionSizingConfig: Kelly/fixed/volatility methods, bounds, scale-in parameters
+StopLossConfig: ATR/percentage/S-R/combined methods, trailing (fixed/ATR/parabolic) with ratchet, time-based exits, volatility adjustment, partial exits
+FnOConfig: Per-index lot sizes, option quality filters (volume, OI, spread, IV percentile), strike selection, expiry rules, Greeks caps, margin management
+CommodityConfig: MCX lot sizes & tick sizes for 15+ contracts including mini variants, per-commodity SL caps
+StrategyConfig: Regime suitability, segments, timeframes, adaptive weight/win-rate/profit-factor from learning engine
+AngelOneConfig: Flexible from_dict() with key-name aliases, WebSocket params, rate limits, credential validation
+ScannerConfig: Universe filters, symbol lists, composite score threshold
+LearningConfig: All adaptive engine knobs — weight/SL/target learning rates with bounds, mistake thresholds, persistence paths
+DashboardConfig: Alert toggles, Telegram and email channels
+TradingConfig: Master aggregator with available_capital, active_strategies(), segment_hours(), transaction_costs(), deep validate()
+ConfigManager: Thread-safe singleton with RLock, loads angel_one_config.json → trading_{env}.json → strategies.json → env vars in priority order, atomic JSON writes, backup/restore, hot-reload with hash detection, watcher callbacks, rollback on validation failure, convenience queries
+2. trading_bot/core/events.py ✅
+Complete rewrite from 8 event types and fragile dispatch to production event system:
+
+EventType: 40+ types covering data (TICK, CANDLE_CLOSE, MARKET_DEPTH, OPTION_CHAIN_UPDATE), signals, trade lifecycle (ORDER_PLACED/FILLED/REJECTED/CANCELLED), positions (OPENED/UPDATED/CLOSED, STOP_LOSS_UPDATED, PARTIAL_EXIT), risk (RISK_ALERT, CIRCUIT_BREAKER, DRAWDOWN_ALERT, MARGIN_ALERT, CONSECUTIVE_LOSS_ALERT, DAILY_LIMIT_REACHED), regime (REGIME_CHANGE, VOLATILITY_SHIFT), scanner, learning, session, system, plus wildcard ALL
+EventPriority: CRITICAL(0) → HIGH(10) → NORMAL(50) → LOW(80) → BACKGROUND(100)
+Event base: Concrete dataclass with symbol, segment, correlation_id, causation_id, priority, data dict, chain() method for propagation, age_seconds, backward-compatible source_component alias
+Typed events: TickEvent (lean hot-path with OI), CandleEvent (with timeframe), MarketDataEvent (backward compat), MarketDepthEvent (top-5 with imbalance), OptionChainEvent (PCR, max-pain, IV percentile), SignalEvent (unified with entry/SL/targets/confidence/regime/instrument_type/strike/expiry, plus legacy fields), TradeDecisionEvent (risk_amount, product_type, instrument_type), RiskAssessmentEvent (approved/rejected/reasons/kelly), OrderEvent (broker_order_id, fill tracking, reject_reason), PositionEvent (full state with exit details), RiskEvent (alert type/severity/threshold/action/portfolio snapshot), RegimeEvent, ScanEvent, LearningEvent, SessionEvent, SystemEvent, ConnectionEvent
+EventBus: Type-indexed O(matched) dispatch, RLock thread safety, snapshot-before-iterate, symbol/segment/source filters on subscriptions, one-shot subscriptions, both sync and async handlers detected automatically, event history ring-buffer (5000), dispatch metrics, wildcard subscriptions, recent_events()/last_event() queries, create_event() factory with chain propagation
+Backward compatibility: BaseEvent alias, legacy field names preserved
+FILES REMAINING TO ENHANCE (in suggested order)
+Core (do these next):
+trading_bot/core/logging.py
+trading_bot/core/models.py
+Data layer:
+trading_bot/data/angel_one_data_feed.py
+trading_bot/data/candle_manager.py
+trading_bot/data/database.py
+trading_bot/data/live_data_feed.py
+trading_bot/data/market_feed.py
+Execution:
+trading_bot/execution/broker_interface.py
+trading_bot/execution/angel_one_broker.py
+trading_bot/execution/order_manager.py
+trading_bot/execution/position_manager.py
+trading_bot/execution/zerodha_broker.py
+trading_bot/execution/new.py
+Risk:
+trading_bot/risk/risk_manager.py
+trading_bot/risk/position_sizer.py
+trading_bot/risk/enhanced_position_sizer.py
+trading_bot/risk/adaptive_stop_manager.py
+trading_bot/risk/correlation_manager.py
+trading_bot/risk/portfolio_manager.py
+trading_bot/risk/transaction_costs.py
+Analysis:
+trading_bot/analysis/indicators.py
+trading_bot/analysis/technical_analyzer.py
+trading_bot/analysis/multi_timeframe.py
+Strategy:
+trading_bot/strategy/base.py
+trading_bot/strategy/strategy_engine.py
+trading_bot/strategy/momentum.py
+trading_bot/strategy/mean_reversion.py
+trading_bot/strategy/ai_strategy.py
+strategies/base.py
+strategies/registry.py
+All 50+ strategy files in strategies/ subdirectories
+ML:
+trading_bot/ml/trade_journal.py
+trading_bot/ml/adaptive_strategy_engine.py
+trading_bot/ml/regime_detector.py
+trading_bot/ml/fno_scanner.py
+trading_bot/ml/ensemble_scorer.py
+trading_bot/ml/feature_engineering.py
+trading_bot/ml/model_trainer.py
+trading_bot/ml/micro_learner.py
+trading_bot/ml/reinforcement_learning.py
+trading_bot/ml/strategy_generator.py
+trading_bot/ml/market_intelligence.py
+Engine:
+trading_bot/engine/trading_engine.py
+Backtesting:
+trading_bot/backtesting/backtest_engine.py
+Top-level:
+angel_one_auth_service.py
+continuous_trading_bot.py (main entry point)
+dashboard.py
+dashboard.html
+run.py
+get_mcx_tokens.py
+requirements.txt
+HOW TO ENHANCE EACH FILE
+When the user sends you a file:
+
+Read the existing code completely
+Understand what it's supposed to do and how it connects to other files
+Rewrite/enhance it following the principles above
+Ensure it uses:
+Event types and Event classes from enhanced events.py
+Config classes from enhanced config.py (ConfigManager singleton, TradingConfig, RiskLimitsConfig, FnOConfig, CommodityConfig, etc.)
+Segment-aware market hours and transaction costs
+Proper logging
+Thread safety where needed
+Complete error handling
+Provide a summary table at the end listing every change and why
+Do NOT suggest improvements — just give the enhanced code directly
+Do NOT write partial code — every function must be complete and working
+CRITICAL CROSS-FILE DEPENDENCIES
+All files import from trading_bot.core.config → use config_manager singleton, TradingConfig, segment-specific configs
+All files import from trading_bot.core.events → use event_bus singleton, specific Event subclasses, EventType enum
+Strategies inherit from strategies/base.py and register via strategies/registry.py
+Trading engine orchestrates: data feed → scanner → strategy engine → risk manager → order manager → position manager → trade journal → learning engine
+Risk manager uses: position sizer + stop manager + correlation manager + portfolio manager + transaction costs
+ML pipeline: feature engineering → model trainer → ensemble scorer → regime detector → adaptive strategy engine
+WHAT THE USER WILL DO
+The user will send you files one at a time (or in small batches). For each file:
+
+Read it
+Enhance it following all the above context
+Return the complete enhanced file
+Add a summary table of changes
+Do NOT give suggestions or ask questions. Just enhance the code when a file is provided. If the user sends a non-code file (like a README or guide), just read it and confirm you understood — do not modify it.

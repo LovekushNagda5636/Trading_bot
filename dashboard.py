@@ -29,13 +29,23 @@ from functools import wraps
 sys.path.insert(0, ".")
 from continuous_trading_bot import (
     MarketScanner, StrategyEngine, load_config,
-    is_market_hours, is_pre_market, FNO_TOKENS, INDEX_TOKENS
+    is_market_hours, is_pre_market, is_commodity_market_hours,
+    FNO_TOKENS, INDEX_TOKENS, MCX_COMMODITY_TOKENS, COMMODITY_SECTORS,
+    CommodityAnalyzer,
 )
 from angel_one_auth_service import AngelOneAuth
 from trading_bot.ml.trade_journal import TradeJournal
 from trading_bot.ml.adaptive_strategy_engine import AdaptiveStrategyEngine
 from trading_bot.ml.regime_detector import MarketRegimeDetector
 from trading_bot.ml.fno_scanner import FnOScanner
+
+# ── v3.0 Enhanced Modules ────────────────────────────────────────────────────
+from trading_bot.data.candle_manager import CandleManager
+from trading_bot.ml.ensemble_scorer import EnsembleScorer
+from trading_bot.ml.micro_learner import MicroLearner
+from trading_bot.risk.transaction_costs import TransactionCostModel
+from trading_bot.risk.correlation_manager import CorrelationRiskManager
+from trading_bot.analysis.multi_timeframe import MultiTimeframeAnalyzer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +56,12 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+# Suppress noisy third-party library logs
+logging.getLogger("smartConnect").setLevel(logging.CRITICAL)
+logging.getLogger("SmartApi").setLevel(logging.CRITICAL)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 app = Flask(__name__)
 # Restrict CORS to localhost only
@@ -95,6 +111,16 @@ journal = TradeJournal()
 adaptive_engine = AdaptiveStrategyEngine(journal=journal)
 regime_detector = MarketRegimeDetector()
 fno_scanner = FnOScanner()
+commodity_analyzer = CommodityAnalyzer()
+
+# v3.0 Enhanced Components
+candle_manager = CandleManager(max_candles=200)
+ensemble_scorer = EnsembleScorer()
+micro_learner = MicroLearner(persistence_dir=".")
+cost_model = TransactionCostModel(trade_type="equity_intraday")
+correlation_mgr = CorrelationRiskManager()
+mtf_analyzer = MultiTimeframeAnalyzer()
+mtf_analyzer.set_candle_manager(candle_manager)
 
 # Scanner with adaptive engine
 scanner = MarketScanner(cfg, adaptive_engine)
@@ -104,6 +130,8 @@ last_scan = {"opportunities": [], "market_summary": {}, "timestamp": None}
 cached_market_data = {}
 cached_fno_opps = []
 cached_context = {}
+cached_commodity_data = {}
+cached_commodity_signals = []
 
 
 def init():
@@ -115,6 +143,9 @@ def init():
             scanner.set_auth(auth)
             if auth.smart_api:
                 fno_scanner.set_api(auth.smart_api)
+                # v3.0: Connect CandleManager to API
+                candle_manager.set_api(auth.smart_api)
+                logger.info("📊 CandleManager connected for real indicators")
         else:
             logger.error("Auth failed - dashboard will show cached data only")
 
@@ -122,22 +153,54 @@ def init():
 def fetch_market_data():
     """Fetch current market data from Angel One."""
     global cached_market_data, cached_context, cached_fno_opps
+    global cached_commodity_data, cached_commodity_signals
 
     raw = scanner.scan()
     if not raw:
         logger.warning("No market data received")
-        return raw
 
-    cached_market_data = raw
+    if raw:
+        cached_market_data = raw
 
-    # Update regime detector
-    cached_context = regime_detector.update(raw)
-    cached_context["budget"] = cfg.get("trading", {}).get("budget", 25000)
+        # Update regime detector
+        cached_context = regime_detector.update(raw)
+        cached_context["budget"] = cfg.get("trading", {}).get("budget", 25000)
+        
+        # v3.0: Update correlation manager with live prices
+        for sym, data in raw.items():
+            if data.get("instrument_type") != "INDEX":
+                correlation_mgr.update_price(sym, data.get("ltp", 0))
 
-    # Scan F&O opportunities
-    cached_fno_opps = fno_scanner.scan_all(raw, cached_context)
+        # Scan F&O opportunities
+        cached_fno_opps = fno_scanner.scan_all(raw, cached_context)
+
+    # Fetch & analyze MCX commodities (runs even if equity scan fails)
+    try:
+        if scanner.fetcher:
+            logger.info("📦 Fetching MCX commodity data...")
+            commodity_raw = scanner.fetcher.fetch_commodities()
+            if commodity_raw:
+                cached_commodity_data = commodity_raw
+                cached_commodity_signals = commodity_analyzer.analyze(commodity_raw)
+                logger.info(f"📦 Commodity scan: {len(commodity_raw)} prices, {len(cached_commodity_signals)} signals")
+            else:
+                logger.warning("📦 Commodity fetch returned empty — MCX segment may not be active")
+        else:
+            logger.warning("📦 No fetcher available for commodities")
+    except Exception as e:
+        logger.warning(f"Commodity scan error: {e}")
 
     return raw
+
+
+def _get_commodity_response():
+    """Build commodity portion of API response."""
+    return {
+        "commodity_data": list(cached_commodity_data.values()),
+        "commodity_signals": cached_commodity_signals[:20],
+        "commodity_market_open": is_commodity_market_hours(),
+        "total_commodities": len(MCX_COMMODITY_TOKENS),
+    }
 
 
 # ── API Routes ────────────────────────────────────────────────────────────────
@@ -156,6 +219,8 @@ def api_scan():
         raw = fetch_market_data()
         if not raw:
             if last_scan.get("timestamp"):
+                # Inject fresh commodity data into cached response
+                last_scan.update(_get_commodity_response())
                 return jsonify(last_scan)
             return jsonify({"error": "No market data available"}), 503
 
@@ -164,10 +229,13 @@ def api_scan():
             min_score=0,
             market_context=cached_context
         )
+        
+        # v3.0: Enhance with real indicators, ensemble scoring, and MTF
+        opps = _enhance_dashboard_opps_v3(opps, cached_context)
 
         # Combine equity + F&O opportunities
         all_opps = opps + cached_fno_opps
-        all_opps.sort(key=lambda x: x.get("score", 0), reverse=True)
+        all_opps.sort(key=lambda x: x.get("ensemble_score", x.get("score", 0)), reverse=True)
 
         total = len(raw)
         gainers = sum(1 for d in raw.values()
@@ -184,16 +252,11 @@ def api_scan():
             key=lambda x: x.get("change_pct", 0), default={}
         )
 
-        indices = {s: d for s, d in raw.items() if d.get("instrument_type") == "INDEX"}
-
-        stocks_sorted = sorted(
-            [d for d in raw.values() if d.get("instrument_type") != "INDEX"],
-            key=lambda x: abs(x.get("change_pct", 0)),
-            reverse=True
-        )
+        indices = {sym: data for sym, data in raw.items()
+                   if data.get("instrument_type") == "INDEX"}
 
         market_summary = {
-            "total_scanned": total,
+            "total_stocks": total,
             "gainers": gainers,
             "losers": losers,
             "unchanged": total - gainers - losers,
@@ -218,10 +281,16 @@ def api_scan():
             "regime_confidence": cached_context.get("regime_confidence", 0),
             "volatility": cached_context.get("volatility", 0),
             "sector_trends": cached_context.get("sector_trends", {}),
+            # v3.0 Risk Context
+            "portfolio_risk": correlation_mgr.get_risk_summary(),
         }
 
         all_stocks = []
-        for d in stocks_sorted:
+        for d in sorted(
+            [v for v in raw.values() if v.get("instrument_type") != "INDEX"],
+            key=lambda x: abs(x.get("change_pct", 0)),
+            reverse=True
+        ):
             all_stocks.append({
                 "symbol": d.get("symbol", ""),
                 "ltp": round(d.get("ltp", 0), 2),
@@ -234,14 +303,7 @@ def api_scan():
             })
 
         # Trade tracking data
-        trades = []
-        if os.path.exists("trades.json"):
-            try:
-                with open("trades.json", "r") as f:
-                    trades = json.load(f)
-            except (json.JSONDecodeError, IOError, OSError) as e:
-                logger.warning(f"Could not load trades.json for dashboard: {e}")
-
+        trades = list(scanner.strategy.trades.values()) if hasattr(scanner.strategy, "trades") else []
         open_trades = [t for t in trades if t.get("status") == "OPEN"]
         closed_trades = [t for t in trades if t.get("status") != "OPEN"]
         current_pnl = sum(t.get("pnl", 0) for t in open_trades)
@@ -285,12 +347,19 @@ def api_scan():
                 "composite_strategies": engine_report.get("composite_strategies", 0),
                 "strategy_weights": engine_report.get("strategy_weights", {}),
                 "sector_trends": cached_context.get("sector_trends", {}),
+                # v3.0 Micro-Learner insights
+                "micro_learned": micro_learner.get_learning_summary(),
+                "ensemble_stats": ensemble_scorer.get_summary(),
             },
             "timestamp": datetime.now().isoformat(),
             "auth_status": auth.is_authenticated,
             "budget": cfg.get("trading", {}).get("budget", 25000),
             "total_fno_stocks": len(scanner.fno_stocks),
         }
+
+        # Always inject fresh commodity data
+        last_scan.update(_get_commodity_response())
+
         return jsonify(last_scan)
 
     except Exception as e:
@@ -362,6 +431,79 @@ def api_journal():
     return jsonify({"trades": trades[::-1]})
 
 
+@app.route("/api/commodities")
+@app.route("/api/risk")
+@require_auth
+def api_risk():
+    """Get detailed risk management analytics."""
+    return jsonify({
+        "sector_exposure": correlation_mgr.get_sector_exposure(),
+        "position_correlations": correlation_mgr.get_full_correlation_matrix(),
+        "risk_summary": correlation_mgr.get_risk_summary(),
+        "budget": cfg.get("trading", {}).get("budget", 25000),
+    })
+
+
+# ── v3.0 Helper for Dashboard ────────────────────────────────────────────────
+
+def _enhance_dashboard_opps_v3(opps, market_context):
+    """v3.0 enhancement pipeline replicated for dashboard UI."""
+    enhanced = []
+    regime = market_context.get("regime", "unknown")
+    
+    # Sort and take top 15 for deep analysis (candle fetch)
+    top_opps = sorted(opps, key=lambda x: x.get("score", 0), reverse=True)[:15]
+    
+    for opp in top_opps:
+        sym = opp.get("symbol", "")
+        ltp = opp.get("ltp", 0)
+        direction = opp.get("direction", "BUY")
+        
+        # 1. Fetch candles for indicators (if not cached)
+        token = FNO_TOKENS.get(sym)
+        if token and auth.smart_api:
+            # Short lookback for dashboard responsiveness
+            candle_manager.fetch_candles(sym, token, interval="5m", lookback_days=2)
+            
+        # 2. Get real indicators
+        indicators = candle_manager.compute_all_indicators(sym, "5m")
+        if indicators:
+            opp["rsi_real"] = indicators.get("rsi_14")
+            opp["atr"] = indicators.get("atr_14")
+            opp["vwap"] = indicators.get("vwap")
+            
+        # 3. Ensemble score
+        strategy_name = opp.get("strategies", [""])[0] if opp.get("strategies") else ""
+        journal_adj = micro_learner.get_strategy_weight(strategy_name) - 1.0
+        
+        ens = ensemble_scorer.score_opportunity(
+            rule_score=opp.get("score", 0),
+            ml_probability=None,
+            candle_indicators=indicators,
+            regime=regime,
+            strategy_name=strategy_name,
+            journal_adjustment=journal_adj,
+            ltp=ltp
+        )
+        opp["ensemble_score"] = ens["ensemble_score"]
+        opp["ensemble_components"] = ens["components"]
+        opp["ensemble_recommendation"] = ens["recommendation"]
+        
+        # 4. MTF
+        mtf = mtf_analyzer.analyze(sym, direction)
+        opp["mtf_confluence"] = mtf["confluence_score"]
+        opp["mtf_recommendation"] = mtf["recommendation"]
+        
+        # 5. Costs
+        costs = cost_model.calculate_costs(ltp, opp.get("target_1", ltp), opp.get("qty", 1))
+        opp["est_costs"] = round(costs.total_cost, 2)
+        opp["breakeven_pct"] = costs.breakeven_move_pct
+        
+        enhanced.append(opp)
+        
+    return enhanced
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8888)
@@ -378,6 +520,7 @@ if __name__ == "__main__":
     print(f"  Dashboard: http://127.0.0.1:{args.port}")
     print(f"  Auth: {'Connected' if auth.is_authenticated else 'Not connected'}")
     print(f"  Stocks: {len(FNO_TOKENS)} F&O + {len(INDEX_TOKENS)} indices")
+    print(f"  Commodities: {len(MCX_COMMODITY_TOKENS)} MCX contracts")
     print(f"  Learning: {len(journal.trades)} trades in journal")
     print(f"  Min Score: {adaptive_engine.params.min_score}")
     print("=" * 60)

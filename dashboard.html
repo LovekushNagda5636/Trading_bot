@@ -35,6 +35,9 @@
             --purple: #8b5cf6;
             --cyan: #06b6d4;
             --pink: #ec4899;
+            --indigo: #6366f1;
+            --rose: #f43f5e;
+            --amber: #f59e0b;
         }
 
         body {
@@ -826,6 +829,160 @@
                 flex-wrap: wrap;
                 justify-content: center;
             }
+
+            .commodity-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* ── Commodity Market Styles ── */
+        .commodity-strip {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .commodity-sector-card {
+            background: linear-gradient(145deg, #1a1a0f, #1a1810);
+            border: 1px solid rgba(245, 158, 11, .15);
+            border-radius: 14px;
+            padding: 16px;
+            transition: all .25s;
+        }
+
+        .commodity-sector-card:hover {
+            border-color: var(--orange);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(245, 158, 11, .15);
+        }
+
+        .commodity-sector-name {
+            font-size: 10px;
+            color: var(--orange);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+
+        .commodity-sector-change {
+            font-size: 22px;
+            font-weight: 900;
+        }
+
+        .commodity-sector-count {
+            font-size: 10px;
+            color: var(--dimmer);
+            margin-top: 2px;
+        }
+
+        .commodity-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .commodity-card {
+            background: linear-gradient(145deg, var(--card), #171a10);
+            border: 1px solid rgba(245, 158, 11, .1);
+            border-radius: 14px;
+            padding: 16px;
+            transition: all .25s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .commodity-card:hover {
+            border-color: var(--orange);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,.3);
+        }
+
+        .commodity-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, var(--orange), #d97706, #b45309);
+            opacity: 0.5;
+        }
+
+        .commodity-card .sym {
+            font-size: 15px;
+            font-weight: 800;
+        }
+
+        .commodity-card .sector-label {
+            font-size: 9px;
+            color: var(--orange);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            opacity: 0.7;
+        }
+
+        .commodity-card .price-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin: 8px 0;
+        }
+
+        .commodity-card .ltp {
+            font-size: 24px;
+            font-weight: 900;
+        }
+
+        .commodity-card .chg {
+            font-size: 14px;
+            font-weight: 800;
+        }
+
+        .commodity-card .details-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 6px;
+            background: rgba(0,0,0,.2);
+            padding: 10px;
+            border-radius: 10px;
+            margin-top: 10px;
+        }
+
+        .commodity-card .detail-item .label {
+            font-size: 9px;
+            color: var(--dimmer);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .commodity-card .detail-item .value {
+            font-size: 12px;
+            font-weight: 700;
+            margin-top: 1px;
+        }
+
+        .opp-instrument.commodity {
+            background: rgba(245, 158, 11, .12);
+            color: var(--orange);
+        }
+
+        .commodity-tab-layout {
+            display: grid;
+            grid-template-columns: 1fr 340px;
+            gap: 20px;
+        }
+
+        @media (max-width: 1200px) {
+            .commodity-tab-layout {
+                grid-template-columns: 1fr;
+            }
+            .commodity-strip {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
     </style>
 </head>
@@ -837,7 +994,7 @@
             <div class="logo">AI</div>
             <div>
                 <div class="header-title">Self-Learning Trading Bot</div>
-                <div class="header-sub">ADAPTIVE AI ENGINE &bull; EQUITY + F&O + OPTIONS</div>
+                <div class="header-sub">ADAPTIVE AI ENGINE &bull; EQUITY + F&O + OPTIONS + MCX COMMODITIES</div>
             </div>
         </div>
         <div class="header-right">
@@ -852,6 +1009,7 @@
     <div class="tab-bar">
         <div class="tab active" data-tab="market" onclick="switchTab('market')">MARKET OVERVIEW</div>
         <div class="tab" data-tab="fno" onclick="switchTab('fno')">F&O SIGNALS</div>
+        <div class="tab" data-tab="commodities" onclick="switchTab('commodities')">COMMODITIES</div>
         <div class="tab" data-tab="scanner" onclick="switchTab('scanner')">FULL SCANNER</div>
     </div>
 
@@ -908,47 +1066,77 @@
 
                 <div class="sidebar">
                     <!-- Learning Panel -->
-                    <div class="learning-panel">
-                        <div class="section-title" style="font-size: 13px">Brain — Self-Learning</div>
-                        <div id="learning-content">
-                            <div class="learning-row">
-                                <span class="learning-label">Regime</span>
-                                <span class="regime-badge unknown" id="lr-regime">unknown</span>
-                            </div>
-                            <div class="learning-row">
-                                <span class="learning-label">Min Score</span>
-                                <span class="learning-val" id="lr-minscore">35</span>
-                            </div>
-                            <div class="learning-row">
-                                <span class="learning-label">SL Multiplier</span>
-                                <span class="learning-val" id="lr-sl">1.0x</span>
-                            </div>
-                            <div class="learning-row">
-                                <span class="learning-label">Target Multiplier</span>
-                                <span class="learning-val" id="lr-tgt">1.0x</span>
-                            </div>
-                            <div class="learning-row">
-                                <span class="learning-label">Journal Trades</span>
-                                <span class="learning-val" id="lr-jtrades">0</span>
-                            </div>
-                            <div class="learning-row">
-                                <span class="learning-label">Journal Win Rate</span>
-                                <span class="learning-val" id="lr-jwr">0%</span>
-                            </div>
-                            <div class="learning-row">
-                                <span class="learning-label">Journal P&L</span>
-                                <span class="learning-val" id="lr-jpnl">&#8377;0</span>
-                            </div>
-                            <div class="learning-row">
-                                <span class="learning-label">Composites</span>
-                                <span class="learning-val" id="lr-composites">0</span>
-                            </div>
+                    <div class="learning-panel" id="micro-learner-panel">
+                        <div class="section-title">
+                            <span>🧠 v3.0 MICRO-LEARNER</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Optimal Score Threshold</span>
+                            <span class="learning-val" id="micro-opt-score">-</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">SL Multiplier Rec.</span>
+                            <span class="learning-val" id="micro-sl-mult">-</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Target Multiplier Rec.</span>
+                            <span class="learning-val" id="micro-tg-mult">-</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Bad Trading Hours</span>
+                            <span class="learning-val" id="micro-bad-hours" style="color:var(--rose)">-</span>
+                        </div>
+                        <div class="learning-row" style="margin-top:8px; border-top:1px solid rgba(255,255,255,0.05); padding-top:10px">
+                            <span class="learning-label">Net P&L (Post-Fees)</span>
+                            <span class="learning-val" id="net-pnl-val" style="font-size:16px">-</span>
+                        </div>
+                    </div>
 
-                            <div style="margin-top: 10px;">
-                                <div class="val-label" style="margin-bottom: 6px">SECTOR TRENDS</div>
-                                <div class="sector-grid" id="sector-trends">
-                                    <div class="sector-item"><span class="sector-name">Loading...</span></div>
-                                </div>
+                    <div class="learning-panel">
+                        <div class="section-title">
+                            <span>⚡ ADAPTIVE ENGINE</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Min Entry Score</span>
+                            <span class="learning-val" id="l-min-score">-</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">SL Multiplier</span>
+                            <span class="learning-val" id="l-sl-mult">-</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Target Multiplier</span>
+                            <span class="learning-val" id="l-tg-mult">-</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Sectors Monitored</span>
+                            <span class="learning-val" id="l-sectors">-</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Regime</span>
+                            <span class="regime-badge unknown" id="lr-regime">unknown</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Journal Trades</span>
+                            <span class="learning-val" id="lr-jtrades">0</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Journal Win Rate</span>
+                            <span class="learning-val" id="lr-jwr">0%</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Journal P&L</span>
+                            <span class="learning-val" id="lr-jpnl">&#8377;0</span>
+                        </div>
+                        <div class="learning-row">
+                            <span class="learning-label">Composites</span>
+                            <span class="learning-val" id="lr-composites">0</span>
+                        </div>
+
+                        <div style="margin-top: 10px;">
+                            <div class="val-label" style="margin-bottom: 6px">SECTOR TRENDS</div>
+                            <div class="sector-grid" id="sector-trends">
+                                <div class="sector-item"><span class="sector-name">Loading...</span></div>
                             </div>
                         </div>
                     </div>
@@ -976,6 +1164,45 @@
             </div>
         </div>
 
+        <!-- COMMODITIES TAB -->
+        <div id="tab-commodities" class="tab-content">
+            <div class="section-title">
+                MCX Commodity Market — Live Prices &amp; Signals
+                <span class="badge" id="commodity-count" style="background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.15);color:var(--orange)">0 Commodities</span>
+            </div>
+
+            <!-- Commodity Sector Summary -->
+            <div class="commodity-strip" id="commodity-sector-strip">
+                <div class="commodity-sector-card">
+                    <div class="commodity-sector-name">Loading...</div>
+                </div>
+            </div>
+
+            <div class="commodity-tab-layout">
+                <!-- Commodity Prices -->
+                <div>
+                    <div class="section-title" style="font-size:13px">
+                        All Commodities
+                        <span class="badge" id="commodity-mkt-status" style="background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.15);color:var(--orange)">...</span>
+                    </div>
+                    <div class="commodity-grid" id="commodity-prices">
+                        <div class="loading-overlay">Fetching MCX commodity data...</div>
+                    </div>
+                </div>
+
+                <!-- Commodity Signals Sidebar -->
+                <div>
+                    <div class="section-title" style="font-size:13px">
+                        Commodity Signals
+                        <span class="badge" id="commodity-signals-count" style="background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.15);color:var(--orange)">0</span>
+                    </div>
+                    <div id="commodity-signals">
+                        <div style="font-size:11px;color:var(--dimmer);text-align:center;padding:30px">No signals yet — run a scan first.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- SCANNER TAB -->
         <div id="tab-scanner" class="tab-content">
             <div class="section-title">Full Scanner — All 150+ F&O Stocks</div>
@@ -993,6 +1220,63 @@
                     </thead>
                     <tbody id="full-table"></tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Risk Tab -->
+        <div id="tab-risk" class="tab-content">
+            <div class="section-title">
+                <span>🔗 PORTFOLIO RISK & CORRELATION</span>
+                <div class="badge" id="risk-score-badge">LOW RISK</div>
+            </div>
+            <div class="stats-grid" id="risk-stats">
+                <div class="stat-card">
+                    <div class="stat-label">Total Exposure</div>
+                    <div class="stat-val" id="total-exposure">₹0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Capital Usage</div>
+                    <div class="stat-val" id="capital-usage">0%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Correlation Heat</div>
+                    <div class="stat-val" id="correlation-heat">0.0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Diversification</div>
+                    <div class="stat-val" id="diversification-score">High</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Active Sectors</div>
+                    <div class="stat-val" id="active-sectors-count">0</div>
+                </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div class="stat-card">
+                    <div class="section-title" style="font-size:12px">SECTOR ALLOCATION</div>
+                    <div id="sector-risk-list" style="margin-top:10px">
+                        <!-- Sector items injected here -->
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="section-title" style="font-size:12px">INTER-STOCK CORRELATION</div>
+                    <div id="correlation-matrix-ui" style="margin-top:10px; font-size:11px; color:var(--dim)">
+                        <!-- Matrix summary here -->
+                        No correlation risk detected in current portfolio.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- History Tab -->
+        <div id="tab-history" class="tab-content">
+            <div class="section-title">
+                Trade History — All Closed Positions
+                <span class="badge" id="history-count">0 Trades</span>
+            </div>
+            <div id="full-trade-history" class="trade-history-full">
+                <div style="font-size:11px;color:var(--dimmer);text-align:center;padding:30px">No closed trades yet.</div>
             </div>
         </div>
     </div>
@@ -1031,6 +1315,11 @@
             isScanning = false;
         }
 
+        function setText(id, value) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value;
+        }
+
         function render(data) {
             const ms = data.market_summary;
             const trades = data.trades;
@@ -1038,7 +1327,7 @@
 
             // Header chips
             document.getElementById('auth-chip').textContent = data.auth_status ? 'Trading Enabled' : 'API Down';
-            document.getElementById('stock-count').textContent = `${data.total_fno_stocks} F&O Stocks`;
+            document.getElementById('stock-count').textContent = `${data.total_fno_stocks} F&O + ${data.total_commodities || 0} MCX`;
 
             // Regime chip
             const regimeChip = document.getElementById('regime-chip');
@@ -1105,7 +1394,7 @@
             if (data.opportunities.length === 0) {
                 oppGrid.innerHTML = '<div class="loading-overlay">No signals above threshold currently.</div>';
             } else {
-                oppGrid.innerHTML = data.opportunities.slice(0, 12).map(o => renderOppCard(o)).join('');
+                oppGrid.innerHTML = data.opportunities.slice(0, 12).map(o => createOppCard(o)).join('');
             }
 
             // F&O Tab
@@ -1115,7 +1404,43 @@
             if (fnoOpps.length === 0) {
                 fnoGrid.innerHTML = '<div class="loading-overlay">No F&O signals in current regime.</div>';
             } else {
-                fnoGrid.innerHTML = fnoOpps.map(o => renderOppCard(o)).join('');
+                fnoGrid.innerHTML = fnoOpps.map(o => createOppCard(o)).join('');
+            }
+
+            // v3.0 Learning & Micro-Learner
+            if (data.learning) {
+                const l = data.learning;
+                setText('l-min-score', Math.round(l.min_score));
+                setText('l-sl-mult', l.sl_multiplier + 'x');
+                setText('l-tg-mult', l.target_multiplier + 'x');
+                setText('l-sectors', Object.keys(l.sector_trends || {}).length);
+                
+                // Micro-Learner insights
+                if (l.micro_learned) {
+                    const m = l.micro_learned;
+                    setText('micro-opt-score', Math.round(m.optimal_score_threshold || 0));
+                    setText('micro-sl-mult', (m.sl_multiplier_rec || 1.0).toFixed(2) + 'x');
+                    setText('micro-tg-mult', (m.target_multiplier_rec || 1.0).toFixed(2) + 'x');
+                    setText('micro-bad-hours', m.bad_hours && m.bad_hours.length ? m.bad_hours.join(', ') : 'None');
+                }
+            }
+
+            // v3.0 Portfolio Risk
+            if (data.market_summary && data.market_summary.portfolio_risk) {
+                const r = data.market_summary.portfolio_risk;
+                setText('total-exposure', '₹' + Math.round(r.total_exposure).toLocaleString());
+                setText('capital-usage', Math.round(r.capital_usage_pct) + '%');
+                setText('correlation-heat', (r.avg_correlation || 0).toFixed(2));
+                setText('active-sectors-count', r.sector_count);
+                
+                const badge = document.getElementById('risk-score-badge');
+                if (r.capital_usage_pct > 70 || r.avg_correlation > 0.6) {
+                    badge.innerText = 'HIGH RISK';
+                    badge.style.color = 'var(--red)';
+                } else {
+                    badge.innerText = 'STABLE';
+                    badge.style.color = 'var(--accent)';
+                }
             }
 
             // Learning Panel
@@ -1184,50 +1509,201 @@
                     <td>${(s.volume / 100000).toFixed(1)}L</td>
                 </tr>
             `).join('');
+
+            // ── Commodity Tab ──
+            renderCommodities(data);
         }
 
-        function renderOppCard(o) {
-            const instrClass = o.instrument_type === 'OPT' ? 'opt' : o.instrument_type === 'FUT' ? 'fut' : 'eq';
-            const instrLabel = o.instrument_type === 'OPT' ? 'OPTION' : o.instrument_type === 'FUT' ? 'FUTURES' : 'EQUITY';
-            const confidence = o.confidence || 0;
-            const confPct = Math.round(confidence * 100);
-            const confColor = confidence > 0.6 ? 'var(--green)' : confidence > 0.3 ? 'var(--orange)' : 'var(--red)';
-
+        function createOppCard(o) {
+            const isBuy = o.direction === 'BUY';
+            const typeClass = isBuy ? 'buy' : 'sell';
+            const color = isBuy ? 'var(--green)' : 'var(--red)';
+            
+            // v3.0: Use ensemble score if available
+            const score = o.ensemble_score || o.score;
+            const confidence = o.ensemble_confidence || (o.confidence * 100);
+            const mtf = o.mtf_recommendation || 'N/A';
+            const mtfColor = mtf.includes('CONFLUENCE') ? 'var(--green)' : mtf.includes('DIVERGENT') ? 'var(--red)' : 'var(--dim)';
+            
             return `
-                <div class="opp-card ${o.direction.toLowerCase()}">
+                <div class="opp-card ${typeClass}">
                     <div class="opp-header">
                         <div>
                             <div class="opp-name">
                                 ${o.symbol}
-                                <span class="opp-instrument ${instrClass}">${instrLabel}</span>
+                                <span class="opp-instrument ${o.instrument_type.toLowerCase()}">${o.instrument_type}</span>
                             </div>
-                            <div class="opp-score">Score: ${o.score}% | ${o.num_strategies || 1} strategies</div>
+                            <div class="opp-score">
+                                Ensemble Score: <strong>${Math.round(score)}</strong> | Conf: ${Math.round(confidence)}%
+                            </div>
                         </div>
                         <div class="opp-dir">${o.direction}</div>
                     </div>
+                    
                     <div class="opp-price-row">
-                        <div class="opp-ltp">&#8377;${o.ltp.toLocaleString()}</div>
-                        <div class="opp-chg ${(o.change_pct || 0) >= 0 ? 'up' : 'down'}">${(o.change_pct || 0) >= 0 ? '+' : ''}${o.change_pct || 0}%</div>
-                    </div>
-                    ${confidence > 0 ? `
-                    <div class="opp-confidence">
-                        <span class="conf-label">AI: ${confPct}%</span>
-                        <div class="conf-bar">
-                            <div class="conf-fill" style="width:${confPct}%; background:${confColor}"></div>
+                        <div class="opp-ltp">₹${o.ltp.toLocaleString()}</div>
+                        <div class="opp-chg ${o.change_pct >= 0 ? 'up' : 'down'}">
+                            ${o.change_pct > 0 ? '+' : ''}${o.change_pct.toFixed(2)}%
                         </div>
-                    </div>` : ''}
-                    <div class="strat-tags">${(o.strategies || []).map(s => `<span class="strat-tag">${s}</span>`).join('')}</div>
-                    <div class="target-grid">
-                        <div><div class="val-label">Target</div><div class="val-price up">&#8377;${o.target_1}</div></div>
-                        <div><div class="val-label">Stop Loss</div><div class="val-price down">&#8377;${o.stop_loss}</div></div>
-                        <div><div class="val-label">Qty</div><div class="val-price">${o.qty}</div></div>
                     </div>
+                    
+                    <div class="opp-confidence">
+                        <div class="conf-bar"><div class="conf-fill" style="width:${confidence}%; background:${color}"></div></div>
+                        <div class="conf-label" style="min-width: 80px">MTF: <span style="color:${mtfColor}">${mtf}</span></div>
+                    </div>
+                    
+                    <div class="strat-tags">
+                        ${o.strategies.map(s => `<span class="strat-tag">${s}</span>`).join('')}
+                    </div>
+                    
+                    <div class="target-grid">
+                        <div>
+                            <div class="val-label">Target 1</div>
+                            <div class="val-price up">₹${o.target_1.toLocaleString()}</div>
+                        </div>
+                        <div>
+                            <div class="val-label">Stop Loss</div>
+                            <div class="val-price down">₹${o.stop_loss.toLocaleString()}</div>
+                        </div>
+                        <div>
+                            <div class="val-label">Est. Costs</div>
+                            <div class="val-price dimmer" style="font-size:11px">₹${o.est_costs || 0}</div>
+                        </div>
+                    </div>
+                    
+                    ${o.mtf_confluence ? `
+                    <div style="font-size: 9px; color: var(--dimmer); margin-top: 10px; display: flex; justify-content: space-between">
+                       <span>RSI: ${o.rsi_real || o.rsi || '-'}</span>
+                       <span>BREAKEVEN: ${o.breakeven_pct || '-'}%</span>
+                       <span>ATR: ${o.atr || '-'}</span>
+                    </div>` : ''}
                 </div>
             `;
         }
 
         window.onload = runScan;
         setInterval(runScan, 60000);
+
+        function renderCommodities(data) {
+            const commodities = data.commodity_data || [];
+            const signals = data.commodity_signals || [];
+            const isMcxOpen = data.commodity_market_open || false;
+
+            document.getElementById('commodity-count').textContent = `${commodities.length} Commodities`;
+            document.getElementById('commodity-mkt-status').textContent = isMcxOpen ? '🟢 MCX Live' : '🔴 MCX Closed';
+
+            // Sector strip — compute from commodity data
+            const sectors = {};
+            commodities.forEach(c => {
+                const sec = c.commodity_sector || 'Other';
+                if (!sectors[sec]) sectors[sec] = { total_chg: 0, count: 0 };
+                sectors[sec].total_chg += c.change_pct || 0;
+                sectors[sec].count++;
+            });
+
+            const sectorStrip = document.getElementById('commodity-sector-strip');
+            const sectorIcons = { 'Energy': '⛽', 'Precious Metals': '🥇', 'Base Metals': '🔩', 'Agriculture': '🌾' };
+            if (Object.keys(sectors).length > 0) {
+                sectorStrip.innerHTML = Object.entries(sectors).map(([name, s]) => {
+                    const avgChg = (s.total_chg / s.count).toFixed(2);
+                    const cls = avgChg >= 0 ? 'up' : 'down';
+                    return `
+                        <div class="commodity-sector-card">
+                            <div class="commodity-sector-name">${sectorIcons[name] || '📦'} ${name}</div>
+                            <div class="commodity-sector-change ${cls}">${avgChg >= 0 ? '+' : ''}${avgChg}%</div>
+                            <div class="commodity-sector-count">${s.count} contract${s.count > 1 ? 's' : ''}</div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            // Commodity price cards
+            const priceGrid = document.getElementById('commodity-prices');
+            if (commodities.length === 0) {
+                priceGrid.innerHTML = '<div class="loading-overlay">No commodity data available. Ensure MCX segment is active.</div>';
+            } else {
+                // Sort by absolute change
+                const sorted = [...commodities].sort((a, b) => Math.abs(b.change_pct) - Math.abs(a.change_pct));
+                priceGrid.innerHTML = sorted.map(c => {
+                    const cls = (c.change_pct || 0) >= 0 ? 'up' : 'down';
+                    return `
+                        <div class="commodity-card">
+                            <div style="display:flex;justify-content:space-between;align-items:start">
+                                <div>
+                                    <div class="sym">${c.symbol}</div>
+                                    <div class="sector-label">${c.commodity_sector || 'MCX'}</div>
+                                </div>
+                                <div class="chg ${cls}" style="text-align:right">
+                                    ${(c.change_pct || 0) >= 0 ? '&#9650;' : '&#9660;'} ${c.change_pct}%
+                                </div>
+                            </div>
+                            <div class="price-row">
+                                <div class="ltp">&#8377;${c.ltp.toLocaleString()}</div>
+                            </div>
+                            <div class="details-row">
+                                <div class="detail-item">
+                                    <div class="label">Open</div>
+                                    <div class="value">&#8377;${c.open}</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="label">High</div>
+                                    <div class="value up">&#8377;${c.high}</div>
+                                </div>
+                                <div class="detail-item">
+                                    <div class="label">Low</div>
+                                    <div class="value down">&#8377;${c.low}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            // Commodity signals sidebar
+            const sigContainer = document.getElementById('commodity-signals');
+            document.getElementById('commodity-signals-count').textContent = `${signals.length} Signals`;
+            if (signals.length === 0) {
+                sigContainer.innerHTML = '<div style="font-size:11px;color:var(--dimmer);text-align:center;padding:30px">No commodity signals above threshold.</div>';
+            } else {
+                sigContainer.innerHTML = signals.map(s => {
+                    const dirCls = s.direction === 'BUY' ? 'up' : 'down';
+                    const confPct = Math.round((s.confidence || 0) * 100);
+                    const confColor = confPct > 60 ? 'var(--green)' : confPct > 30 ? 'var(--orange)' : 'var(--red)';
+                    return `
+                        <div class="trade-item" style="border-left: 3px solid ${s.direction === 'BUY' ? 'var(--green)' : 'var(--red)'}">
+                            <div class="trade-header">
+                                <span class="trade-sym">${s.symbol}
+                                    <span class="opp-instrument commodity">MCX</span>
+                                </span>
+                                <span class="opp-dir" style="font-size:10px;padding:2px 10px;border-radius:6px;
+                                    background:${s.direction === 'BUY' ? 'rgba(16,185,129,.1)' : 'rgba(239,68,68,.1)'};
+                                    color:${s.direction === 'BUY' ? 'var(--green)' : 'var(--red)'};
+                                    border:1px solid ${s.direction === 'BUY' ? 'rgba(16,185,129,.15)' : 'rgba(239,68,68,.15)'}">
+                                    ${s.direction}
+                                </span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:baseline;margin:6px 0">
+                                <span style="font-size:18px;font-weight:900">&#8377;${s.ltp.toLocaleString()}</span>
+                                <span class="${dirCls}" style="font-size:12px;font-weight:700">${s.change_pct >= 0 ? '+' : ''}${s.change_pct}%</span>
+                            </div>
+                            <div class="opp-confidence" style="margin-bottom:8px">
+                                <span class="conf-label">Score: ${s.score}%</span>
+                                <div class="conf-bar">
+                                    <div class="conf-fill" style="width:${confPct}%;background:${confColor}"></div>
+                                </div>
+                            </div>
+                            <div class="strat-tags">${(s.strategies || []).map(st => `<span class="strat-tag">${st}</span>`).join('')}</div>
+                            <div class="target-grid" style="grid-template-columns:1fr 1fr 1fr">
+                                <div><div class="val-label">Target</div><div class="val-price up">&#8377;${s.target_1}</div></div>
+                                <div><div class="val-label">Stop Loss</div><div class="val-price down">&#8377;${s.stop_loss}</div></div>
+                                <div><div class="val-label">R:R</div><div class="val-price">${s.risk_reward}x</div></div>
+                            </div>
+                            ${s.reasons ? `<div style="margin-top:8px;font-size:10px;color:var(--dimmer)">${s.reasons.join(' • ')}</div>` : ''}
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
     </script>
 </body>
 
